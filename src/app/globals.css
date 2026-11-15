@@ -1,26 +1,303 @@
 @import "tailwindcss";
 
+/* `short:` = short screens, e.g. a phone held sideways. */
+@custom-variant short (@media (max-height: 520px));
+
+/* ==========================================================================
+   Mira design system — light only, calm, monochrome with one blue accent.
+   ========================================================================== */
+
+@theme {
+  /* Surfaces */
+  --color-canvas: #f5f5f7;
+  --color-surface: #ffffff;
+  --color-sunken: #f2f2f4;
+  --color-hover: #ebebef;
+  --color-line: rgb(0 0 0 / 0.07);
+  --color-line-strong: rgb(0 0 0 / 0.12);
+
+  /* Ink */
+  --color-ink: #1d1d1f;
+  --color-ink-2: #424245;
+  --color-ink-3: #6e6e73;
+  --color-ink-4: #a1a1a6;
+
+  /* Accent + states */
+  --color-accent: #2f5fd0;
+  --color-accent-hover: #2550b8;
+  --color-accent-soft: #eef3fd;
+  --color-rec: #e5372b;
+  --color-rec-soft: #fdecea;
+  --color-danger: #b42318;
+  --color-danger-soft: #fef1f0;
+  --color-warn: #7a5200;
+  --color-warn-soft: #fff7e6;
+  --color-success: #1f6b4a;
+  --color-success-soft: #ecf7f1;
+
+  /* Speakers (AA on white, distinct but calm) */
+  --color-spk-0: #1d1d1f;
+  --color-spk-1: #2f5fd0;
+  --color-spk-2: #a8431b;
+  --color-spk-3: #2e6b52;
+  --color-spk-4: #7a3e9d;
+  --color-spk-5: #8a6d00;
+
+  --font-sans: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --radius-card: 24px;
+
+  --shadow-card: 0 0 0 1px rgb(0 0 0 / 0.06), 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.08);
+  --shadow-card-hover: 0 0 0 1px rgb(0 0 0 / 0.08), 0 2px 4px rgb(0 0 0 / 0.04), 0 18px 40px -18px rgb(0 0 0 / 0.18);
+  --shadow-pop: 0 0 0 1px rgb(0 0 0 / 0.06), 0 12px 32px -8px rgb(0 0 0 / 0.18), 0 32px 64px -24px rgb(0 0 0 / 0.18);
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+
+  --animate-page: page-in 0.45s var(--ease-out) backwards;
+  --animate-fade-up: fade-up 0.5s var(--ease-out) backwards;
+  --animate-fade-in: fade-in 0.3s var(--ease-out) backwards;
+  --animate-pop: pop-in 0.28s var(--ease-out) backwards;
+  --animate-word: word-in 0.35s var(--ease-out) backwards;
+}
+
+/* Light only: also stops browsers from force-darkening the page. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: only light;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+  /* No grey flash on tap (iOS/Android); taps respond instantly (no double-tap-zoom delay). */
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1.5;
+  letter-spacing: -0.006em;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgb(47 95 208 / 0.18);
+}
+
+:focus-visible {
+  outline: 2.5px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ---------- Components ---------- */
+@layer components {
+  .card {
+    @apply rounded-[var(--radius-card)] bg-surface shadow-[var(--shadow-card)];
+  }
+
+  .btn {
+    @apply relative inline-flex select-none items-center justify-center gap-2 whitespace-nowrap rounded-full font-semibold transition-[background-color,color,box-shadow,transform,opacity] duration-200 ease-[var(--ease-out)] active:scale-[0.97] disabled:pointer-events-none disabled:opacity-45;
+  }
+  .btn-lg { @apply h-14 px-7 text-[17px]; }
+  .btn-md { @apply h-11 px-5 text-[15px]; }
+  /* Small buttons grow to the 44px touch minimum on phones. */
+  .btn-sm { @apply h-11 px-4 text-[15px] sm:h-9 sm:px-3.5 sm:text-[14px]; }
+  .btn-icon { @apply h-11 w-11 p-0 sm:h-10 sm:w-10; }
+
+  .btn-primary { @apply bg-ink text-white shadow-[0_1px_2px_rgb(0_0_0/0.2),0_6px_16px_-6px_rgb(0_0_0/0.35)] hover:bg-black; }
+  .btn-accent { @apply bg-accent text-white shadow-[0_6px_16px_-6px_rgb(47_95_208/0.6)] hover:bg-accent-hover; }
+  .btn-secondary { @apply bg-surface text-ink shadow-[inset_0_0_0_1px_var(--color-line-strong)] hover:bg-sunken; }
+  .btn-ghost { @apply bg-transparent text-ink-2 hover:bg-hover hover:text-ink; }
+  .btn-danger { @apply bg-rec text-white hover:bg-[#c92d22]; }
+  .btn-danger-ghost { @apply bg-transparent text-danger hover:bg-danger-soft; }
+
+  .field {
+    @apply h-13 w-full rounded-[14px] bg-sunken px-4 text-[17px] text-ink outline-none transition-[background-color,box-shadow] duration-200 placeholder:text-ink-4 hover:bg-hover focus:bg-surface focus:shadow-[0_0_0_1px_var(--color-accent),0_0_0_4px_rgb(47_95_208/0.15)];
+  }
+
+  .label {
+    @apply text-[14px] font-semibold text-ink-2;
+  }
+
+  .eyebrow {
+    @apply text-[13px] font-semibold uppercase tracking-[0.06em] text-ink-3;
+  }
+
+  .chip {
+    @apply inline-flex h-7 items-center gap-1.5 rounded-full bg-sunken px-2.5 text-[13px] font-medium text-ink-2;
+  }
+
+  .skeleton {
+    @apply relative overflow-hidden rounded-lg bg-sunken;
+  }
+  .skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.7), transparent);
+    animation: shimmer 1.5s infinite;
+  }
+}
+
+/* ---------- Motion ---------- */
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.96) translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes word-in {
+  from { opacity: 0; filter: blur(3px); transform: translateY(3px); }
+  to { opacity: 1; filter: none; transform: none; }
+}
+@keyframes shimmer {
+  to { transform: translateX(100%); }
+}
+@keyframes rec-pulse {
+  0% { box-shadow: 0 0 0 0 rgb(229 55 43 / 0.5); }
+  100% { box-shadow: 0 0 0 10px rgb(229 55 43 / 0); }
+}
+@keyframes ripple {
+  from { transform: scale(1); opacity: 0.35; }
+  to { transform: scale(1.6); opacity: 0; }
+}
+@keyframes caret {
+  50% { opacity: 0; }
+}
+
+.rec-dot { animation: rec-pulse 1.6s var(--ease-out) infinite; }
+.ripple { animation: ripple 2s var(--ease-out) infinite; }
+.ripple-delay { animation-delay: 1s; }
+.caret::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 3px;
+  vertical-align: -0.12em;
+  background: currentColor;
+  animation: caret 1s steps(1) infinite;
+}
+
+/* Staggered list entrance: set --i on each item. */
+.stagger { animation: fade-up 0.5s var(--ease-out) backwards; animation-delay: calc(var(--i, 0) * 40ms); }
+
+/* Native <dialog> */
+dialog::backdrop {
+  background: rgb(0 0 0 / 0.28);
+  backdrop-filter: blur(4px);
+  animation: fade-in 0.2s var(--ease-out);
+}
+dialog[open] { animation: pop-in 0.25s var(--ease-out); }
+
+/* On phones, dialogs become bottom sheets (easy to reach with a thumb). */
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: none; }
+}
+@media (max-width: 639px) {
+  dialog.sheet {
+    margin: auto 0 0;
+    width: 100%;
+    max-width: 100%;
+    border-radius: 24px 24px 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  dialog.sheet[open] { animation: sheet-up 0.32s var(--ease-out); }
+}
+
+/* Space for the iPhone home bar / notch (needs viewport-fit=cover). */
+.pb-safe { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+.bottom-safe { bottom: max(16px, calc(env(safe-area-inset-bottom) + 8px)); }
+.px-safe {
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+}
+
+/* Touch screens of any width (phones, landscape phones, tablets): every
+   tappable control is at least 44×44px. */
+@media (pointer: coarse) {
+  .tap,
+  .btn-sm,
+  .btn-icon {
+    min-height: 44px;
+  }
+  .tap,
+  .btn-icon {
+    min-width: 44px;
+  }
+}
+
+/* Revealed on hover with a mouse; always visible on touch screens and phones. */
+@media (hover: hover) and (pointer: fine) and (min-width: 640px) {
+  .hover-reveal { opacity: 0; transition: opacity 0.15s; }
+  .group:hover .hover-reveal,
+  .hover-reveal:focus-visible { opacity: 1; }
+}
+
+/* Range input used by the audio player: a thin 4px track inside a tall,
+   easy-to-grab touch area. */
+.scrubber {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 32px;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+}
+.scrubber::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--color-ink) 0 var(--p, 0%), rgb(0 0 0 / 0.12) var(--p, 0%) 100%);
+}
+.scrubber::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--color-ink);
+  box-shadow: 0 0 0 3px #fff;
+  transition: transform 0.15s;
+}
+.scrubber:hover::-webkit-slider-thumb,
+.scrubber:active::-webkit-slider-thumb { transform: scale(1.25); }
+.scrubber::-moz-range-track { height: 4px; border-radius: 999px; background: rgb(0 0 0 / 0.12); }
+.scrubber::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--color-ink); }
+.scrubber::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--color-ink);
+}
+/* Bigger handle on touch screens. */
+@media (pointer: coarse) {
+  .scrubber::-webkit-slider-thumb { width: 18px; height: 18px; margin-top: -7px; }
+  .scrubber::-moz-range-thumb { width: 18px; height: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
