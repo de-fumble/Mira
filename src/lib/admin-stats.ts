@@ -88,6 +88,30 @@ export async function getClaudeStatus(): Promise<Service> {
   }
 }
 
+/* -------------------------------------------------------------- Gemini API */
+
+export async function getGeminiStatus(): Promise<Service> {
+  const name = "AI document review";
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return { name, state: "off", detail: "GEMINI_API_KEY not set" };
+  const model = process.env.GEMINI_MODELS?.split(",")[0]?.trim() || "gemini-3.5-flash";
+  try {
+    // Reading model info is free and confirms the key works.
+    const { value: res, ms } = await timed(() =>
+      fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}`, {
+        headers: { "x-goog-api-key": key },
+        signal: AbortSignal.timeout(10_000),
+        cache: "no-store",
+      }),
+    );
+    if (res.ok) return { name, state: "ok", detail: `Gemini connected (${model})`, ms };
+    if (res.status === 400 || res.status === 401 || res.status === 403) return { name, state: "down", detail: "Key rejected" };
+    return { name, state: "down", detail: `Gemini API error ${res.status}` };
+  } catch {
+    return { name, state: "down", detail: "Unreachable" };
+  }
+}
+
 /* -------------------------------------------------- Database, users, usage */
 
 type MeetingRow = {

@@ -3,6 +3,7 @@
 import { ArrowDown, Check, Mic, Pause, Play, Square, Trash } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { MIME_CANDIDATES, openDeepgram } from "@/lib/deepgram-client";
 import { createClient } from "@/lib/supabase/client";
 import { appendWords, formatClock, speakerLabel, transcriptToText, type Segment } from "@/lib/transcript";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -25,8 +26,6 @@ const DEEPGRAM_URL =
     endpointing: "300",
   });
 
-const MIME_CANDIDATES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
-
 type DeepgramResult = {
   type: string;
   is_final?: boolean;
@@ -37,33 +36,6 @@ type DeepgramResult = {
     }[];
   };
 };
-
-/** Opens the Deepgram socket. The docs don't say which subprotocol a
- *  temporary token uses, so try "bearer" first, then "token". */
-async function openDeepgram(token: string): Promise<WebSocket> {
-  const attempt = (scheme: string) =>
-    new Promise<WebSocket>((resolve, reject) => {
-      const ws = new WebSocket(DEEPGRAM_URL, [scheme, token]);
-      const timer = setTimeout(() => {
-        ws.close();
-        reject(new Error("timeout"));
-      }, 8000);
-      ws.onopen = () => {
-        clearTimeout(timer);
-        ws.onclose = null;
-        resolve(ws);
-      };
-      ws.onclose = () => {
-        clearTimeout(timer);
-        reject(new Error("rejected"));
-      };
-    });
-  try {
-    return await attempt("bearer");
-  } catch {
-    return await attempt("token");
-  }
-}
 
 const now = () => Date.now();
 
@@ -321,7 +293,7 @@ export function Recorder({ aiNotes = true, saveAudio = true }: { aiNotes?: boole
     }
     let ws: WebSocket;
     try {
-      ws = await openDeepgram(tokenBody.token);
+      ws = await openDeepgram(DEEPGRAM_URL, tokenBody.token);
     } catch {
       return fail("Couldn’t reach the transcription service. Check your internet connection and try again.");
     }

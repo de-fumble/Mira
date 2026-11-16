@@ -11,6 +11,7 @@ const nextConfig: NextConfig = {
   // Ship the PDF fonts with the export route when deployed.
   outputFileTracingIncludes: {
     "/api/meetings/\\[id\\]/export": ["./assets/fonts/**/*"],
+    "/api/documents/\\[id\\]/export": ["./assets/fonts/**/*"],
   },
   turbopack: {
     rules: {

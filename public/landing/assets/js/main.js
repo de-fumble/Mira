@@ -124,7 +124,7 @@
       if (hear.classList.contains("is-speaking") || hear.classList.contains("is-loading")) { stopSpeaking(); reset(); return; }
       hear.classList.add("is-loading");
       label.textContent = "Loading…";
-      speak(`Hello, I’m Mira, speaking as ${voiceName(voiceId)}. I’ll help you follow every conversation, and I’ll speak for you whenever you need me to. Every word, within reach.`, {
+      speak(`Hello, I’m Mira, speaking as ${voiceName(voiceId)}. Read your document out loud, and I’ll type every word, check it, and get it ready to send.`, {
         onstart: () => { hear.classList.remove("is-loading"); hear.classList.add("is-speaking"); label.textContent = "Stop"; },
         onend: reset,
       });
@@ -173,10 +173,10 @@
   };
 
   const script = [
-    { kind: "them", who: "Dr. Patel", text: "Good morning, Margaret. How have you been sleeping lately?" },
-    { kind: "me", who: "You · typed", text: "Not very well. I keep waking up around three." },
-    { kind: "them", who: "Dr. Patel", text: "Let’s move your evening tablet to dinnertime, and see how that feels." },
-    { kind: "mira", who: "Mira’s note", text: "Take your evening tablet with dinner, starting tonight." },
+    { kind: "them", who: "Dictating", text: "The quarterly report shows revenue of ₦2.4 million, 18% above target." },
+    { kind: "them", who: "Dictating", text: "Growth came mostly from our Lagos and Ibadan offices." },
+    { kind: "them", who: "Dictating", text: "Please review the attached budget before Friday’s meeting." },
+    { kind: "mira", who: "AI review", text: "Score 97 · Ready to export as Word or PDF." },
   ];
 
   const lineEl = (item) => {
@@ -248,7 +248,7 @@
           setStatus("Listening");
           await sleep(500);
         } else {
-          setStatus("Saving note", "speak");
+          setStatus("Reviewing", "speak");
           text.textContent = item.text;
           await sleep(3800);
         }

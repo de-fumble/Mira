@@ -836,3 +836,14 @@ input[type="range"]::-moz-range-thumb {
 @media (prefers-reduced-motion: reduce) {
   .voices li .voice-dot, .btn svg { animation: none !important; }
 }
+
+/* ---------- Spoken punctuation tile ---------- */
+.spoken { justify-content: center; }
+.spoken__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.spoken__list li {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 12px 16px; border-radius: 14px; background: #fff; box-shadow: 0 0 0 1px var(--line);
+  font-size: 17px;
+}
+.spoken__list span { color: var(--ink-3); font-style: italic; }
+.spoken__list b { font-size: 20px; font-weight: 700; color: var(--ink); white-space: nowrap; }

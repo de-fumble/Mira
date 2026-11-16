@@ -2,6 +2,7 @@
 
 import { getViewer } from "@/lib/admin";
 import { isFeatureKey } from "@/lib/features";
+import { runEngineTest, type EngineTestResult } from "@/lib/review-test";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /** Turns one feature on or off. Admins only — checked on every call. */
@@ -22,4 +23,11 @@ export async function setFeature(key: string, enabled: boolean): Promise<{ error
     };
   }
   return {};
+}
+
+/** Sends a sample paragraph through the correction engine. Admins only. */
+export async function testCorrectionEngine(): Promise<EngineTestResult> {
+  const viewer = await getViewer();
+  if (!viewer.isAdmin) return { ok: false, outcome: "failed", error: "Only admins can run a test review.", ms: 0 };
+  return runEngineTest(viewer.id);
 }

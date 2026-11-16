@@ -216,3 +216,101 @@ export function buildPdf(m: ExportMeeting): Promise<Buffer> {
     doc.end();
   });
 }
+
+// ---------------------------------------------------------------- Documents
+
+type ExportDocument = { title: string; content: string };
+
+/** Paragraphs (blank-line separated), each a list of lines. */
+function paragraphsOf(content: string): string[][] {
+  return content
+    .replace(/\r\n?/g, "\n")
+    .split(/\n\s*\n/)
+    .map((p) => p.split("\n").map((l) => l.trimEnd()))
+    .filter((lines) => lines.some((l) => l.trim()));
+}
+
+/** A dictated document as a clean Word file: title, paragraphs, page numbers. */
+export async function buildDocumentDocx(d: ExportDocument): Promise<Buffer> {
+  const body = paragraphsOf(d.content).map(
+    (lines) =>
+      new Paragraph({
+        spacing: { after: 200, line: 312 },
+        children: lines.map((line, i) => new TextRun({ text: line, size: 24, break: i > 0 ? 1 : undefined })),
+      }),
+  );
+  const doc = new Document({
+    creator: "Mira",
+    title: d.title,
+    styles: { default: { document: { run: { font: "Calibri", size: 24, color: INK } } } },
+    sections: [
+      {
+        properties: { page: { margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } } },
+        footers: {
+          default: new Footer({
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [
+                  new TextRun({ text: "Page ", size: 18, color: MUTED }),
+                  new TextRun({ children: [PageNumber.CURRENT], size: 18, color: MUTED }),
+                  new TextRun({ text: " of ", size: 18, color: MUTED }),
+                  new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 18, color: MUTED }),
+                ],
+              }),
+            ],
+          }),
+        },
+        children: [
+          new Paragraph({ heading: HeadingLevel.TITLE, spacing: { after: 320 }, children: [new TextRun({ text: d.title, bold: true, size: 40, color: INK })] }),
+          ...(body.length ? body : [new Paragraph({ children: [new TextRun({ text: "" })] })]),
+        ],
+      },
+    ],
+  });
+  return Packer.toBuffer(doc);
+}
+
+/** The same document as an A4 PDF. */
+export function buildDocumentPdf(d: ExportDocument): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const margin = 72;
+    const doc = new PDFDocument({
+      size: "A4",
+      margins: { top: margin, bottom: margin + 12, left: margin, right: margin },
+      bufferPages: true,
+      font: REGULAR,
+      info: { Title: d.title, Author: "Mira", Creator: "Mira" },
+    });
+    const chunks: Buffer[] = [];
+    doc.on("data", (c: Buffer) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    doc.registerFont("body", REGULAR);
+    doc.registerFont("bold", BOLD);
+    const width = doc.page.width - margin * 2;
+
+    doc.font("bold").fontSize(20).fillColor(`#${INK}`).text(d.title, { width, lineGap: 2 });
+    doc.moveDown(1);
+    doc.font("body").fontSize(12).fillColor(`#${INK}`);
+    for (const lines of paragraphsOf(d.content)) {
+      doc.text(lines.join("\n"), margin, doc.y, { width, lineGap: 4, paragraphGap: 0 });
+      doc.moveDown(0.8);
+    }
+
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
+      doc.switchToPage(i);
+      const bottom = doc.page.margins.bottom;
+      doc.page.margins.bottom = 0;
+      doc
+        .font("body")
+        .fontSize(9)
+        .fillColor(`#${MUTED}`)
+        .text(`Page ${i + 1} of ${range.count}`, margin, doc.page.height - margin + 16, { width, align: "center" });
+      doc.page.margins.bottom = bottom;
+    }
+    doc.end();
+  });
+}

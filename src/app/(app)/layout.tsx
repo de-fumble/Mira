@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { HeaderBrand, HeaderRecordButton, RecordLink, UserMenu } from "@/components/AppHeader";
+import { AppNav, AppNavFallback, HeaderBrand, HeaderRecordButton, RecordLink, UserMenu } from "@/components/AppHeader";
 import { getViewer } from "@/lib/admin";
 import { getFeatures } from "@/lib/features";
 
@@ -8,7 +8,12 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
     <>
       <header className="sticky top-0 z-20 border-b border-line bg-canvas/80 pt-[env(safe-area-inset-top)] backdrop-blur-xl backdrop-saturate-[1.8]">
         <div className="px-safe mx-auto flex h-16 max-w-5xl items-center justify-between gap-4 sm:px-6">
-          <HeaderBrand />
+          <div className="flex min-w-0 items-center gap-3 sm:gap-6">
+            <HeaderBrand />
+            <Suspense fallback={<AppNavFallback />}>
+              <AppNav />
+            </Suspense>
+          </div>
           <div className="flex items-center gap-2.5">
             <Suspense fallback={<RecordLink />}>
               <HeaderRecord />

@@ -23,7 +23,7 @@ async function AdminGate({ children }: { children: React.ReactNode }) {
           <p className="eyebrow">Admin</p>
           <h1 className="mt-1 text-[30px] font-semibold leading-tight tracking-[-0.03em] sm:text-[36px]">Mira status</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <AdminTabs />
           <RefreshButton />
         </div>

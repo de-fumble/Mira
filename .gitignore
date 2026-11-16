@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Any other env files with real keys (e.g. envfile.env.local)
+*.env
+*.env.local

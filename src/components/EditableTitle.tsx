@@ -12,7 +12,18 @@ import { Spinner } from "./ui";
  * Enter or click away to save, Escape to cancel. Shows the new title
  * immediately and rolls back if saving fails.
  */
-export function EditableTitle({ meetingId, initialTitle }: { meetingId: string; initialTitle: string }) {
+export function EditableTitle({
+  meetingId,
+  initialTitle,
+  onRename,
+  noun = "meeting",
+}: {
+  meetingId?: string;
+  initialTitle: string;
+  /** Rename something other than a meeting (e.g. a document). */
+  onRename?: (title: string) => Promise<{ error?: string; title?: string }>;
+  noun?: string;
+}) {
   const router = useRouter();
   const [title, setTitle] = useState(initialTitle);
   const [draft, setDraft] = useState(initialTitle);
@@ -63,7 +74,7 @@ export function EditableTitle({ meetingId, initialTitle }: { meetingId: string; 
     setTitle(next); // optimistic
     setError(null);
     startTransition(async () => {
-      const result = await renameMeeting(meetingId, next);
+      const result = onRename ? await onRename(next) : await renameMeeting(meetingId ?? "", next);
       if (result.error) {
         setTitle(previous);
         setDraft(previous);
@@ -89,7 +100,7 @@ export function EditableTitle({ meetingId, initialTitle }: { meetingId: string; 
             save();
           }}
         >
-          <label htmlFor="meeting-title" className="sr-only">Meeting title</label>
+          <label htmlFor="meeting-title" className="sr-only">{noun === "meeting" ? "Meeting" : "Document"} title</label>
           <input
             ref={input}
             id="meeting-title"
@@ -119,7 +130,7 @@ export function EditableTitle({ meetingId, initialTitle }: { meetingId: string; 
           <button
             type="button"
             onClick={startEditing}
-            title="Rename meeting"
+            title={`Rename ${noun}`}
             className="-mx-2.5 -my-1 min-w-0 rounded-xl px-2.5 py-1 text-left transition-colors hover:bg-hover"
           >
             {title}
@@ -136,7 +147,7 @@ export function EditableTitle({ meetingId, initialTitle }: { meetingId: string; 
               <button
                 type="button"
                 onClick={startEditing}
-                aria-label="Rename meeting"
+                aria-label={`Rename ${noun}`}
                 className="tap hover-reveal -m-1.5 grid h-11 w-11 place-items-center rounded-full text-ink-4 transition hover:bg-hover hover:text-ink active:bg-hover sm:m-0 sm:h-8 sm:w-8"
               >
                 <Pencil aria-hidden className="h-4 w-4" />

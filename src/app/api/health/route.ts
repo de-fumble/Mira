@@ -30,6 +30,7 @@ export async function GET() {
     meetingsTable: meetings.error ? `missing (${meetings.error.code})` : "ok",
     deepgramKeySet: Boolean(process.env.DEEPGRAM_API_KEY),
     anthropicKeySet: Boolean(process.env.ANTHROPIC_API_KEY),
+    geminiKeySet: Boolean(process.env.GEMINI_API_KEY),
   };
 
   const ok = result.publishableKey === "ok" && result.secretKey === "ok";

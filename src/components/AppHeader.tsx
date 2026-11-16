@@ -48,6 +48,42 @@ export function HeaderBrand() {
   );
 }
 
+const NAV = [
+  { href: "/", label: "Meetings", match: (p: string) => p === "/" || p.startsWith("/meetings") || p === "/record" },
+  { href: "/documents", label: "Documents", match: (p: string) => p.startsWith("/documents") },
+] as const;
+
+function NavLinks({ path }: { path: string | null }) {
+  return (
+    <nav aria-label="Main" className="flex items-center gap-0.5 rounded-full bg-sunken p-1">
+      {NAV.map((item) => {
+        const on = path !== null && item.match(path);
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            aria-current={on ? "page" : undefined}
+            className={`tap rounded-full px-3 py-1.5 text-[14px] font-medium transition sm:px-3.5 ${
+              on ? "bg-surface text-ink shadow-[0_1px_3px_rgb(0_0_0/0.12)]" : "text-ink-3 hover:text-ink"
+            }`}
+          >
+            {item.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+/** Meetings / Documents switcher. Render inside <Suspense fallback={<AppNavFallback />}>. */
+export function AppNav() {
+  return <NavLinks path={usePathname()} />;
+}
+
+export function AppNavFallback() {
+  return <NavLinks path={null} />;
+}
+
 const menuItem =
   "tap flex h-11 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[15px] font-medium text-ink-2 transition hover:bg-sunken hover:text-ink active:bg-sunken sm:h-10 sm:text-[14px]";
 

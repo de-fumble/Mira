@@ -12,6 +12,7 @@ import {
   Mic,
   Minus,
   Sparkles,
+  SpellCheck,
   Users,
 } from "lucide-react";
 import Link from "next/link";
@@ -19,9 +20,10 @@ import { Suspense } from "react";
 import { BarChart } from "@/components/admin/BarChart";
 import { Notice } from "@/components/ui";
 import { requireAdmin } from "@/lib/admin";
-import { getClaudeStatus, getDeepgramStatus, getSubscriptionStats, getUsageStats, type Service, type SubscriptionStats, type UsageStats } from "@/lib/admin-stats";
+import { getClaudeStatus, getDeepgramStatus, getGeminiStatus, getSubscriptionStats, getUsageStats, type Service, type SubscriptionStats, type UsageStats } from "@/lib/admin-stats";
 import { formatNaira } from "@/lib/billing-rules";
 import { FEATURES, getFeatureRows } from "@/lib/features";
+import { getRecentReviewFailures } from "@/lib/review-stats";
 import { formatShortDate, formatTime, getClock, type Clock as ClockT } from "@/lib/time";
 import { formatDuration } from "@/lib/transcript";
 
@@ -36,24 +38,27 @@ export default function AdminOverviewPage() {
 async function Overview() {
   await requireAdmin();
   const clock = await getClock();
-  const [deepgram, claude, usage, settings, subs] = await Promise.all([
+  const [deepgram, claude, gemini, usage, settings, subs, reviewFailures] = await Promise.all([
     getDeepgramStatus(),
     getClaudeStatus(),
+    getGeminiStatus(),
     getUsageStats(clock),
     getFeatureRows(),
     getSubscriptionStats(),
+    getRecentReviewFailures(),
   ]);
 
   const services: (Service & { Icon: typeof Database })[] = [
     { ...usage.database, Icon: Database },
     { ...deepgram.service, Icon: Mic },
     { ...claude, Icon: Sparkles },
+    { ...gemini, Icon: SpellCheck },
     { ...usage.storage, Icon: HardDrive },
   ];
   const down = services.filter((s) => s.state === "down");
   const notSetUp = services.filter((s) => s.state === "off");
   const lowBalance = deepgram.balanceUsd !== null && deepgram.balanceUsd < deepgram.lowBalanceUsd;
-  const issues = down.length + (lowBalance ? 1 : 0) + usage.attention.unfinished + usage.attention.stuckNotes;
+  const issues = down.length + (lowBalance ? 1 : 0) + usage.attention.unfinished + usage.attention.stuckNotes + reviewFailures;
   const checkedAt = formatTime(new Date().toISOString(), clock);
   // "$199.99" in every locale (not "US$199.99").
   const usd = (n: number) =>
@@ -182,6 +187,7 @@ async function Overview() {
           <ul className="mt-3 flex flex-col gap-2 text-[14px]">
             <AttentionRow count={usage.attention.unfinished} text="recordings that never finished saving" />
             <AttentionRow count={usage.attention.stuckNotes} text="meetings stuck on “writing notes” for over an hour" />
+            <AttentionRow count={reviewFailures} text={`document ${reviewFailures === 1 ? "review" : "reviews"} didn’t finish in the last 24 hours`} />
             {down.map((s) => (
               <AttentionRow key={s.name} count={1} text={`${s.name}: ${s.detail}`} />
             ))}
