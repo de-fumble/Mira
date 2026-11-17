@@ -134,7 +134,9 @@ export function DocumentEditor({
     return () => {
       document.removeEventListener("visibilitychange", onHide);
       window.removeEventListener("beforeunload", onUnload);
-      window.clearTimeout(timerRef.current);
+      // Leaving the document (Next.js hides the editor): save what's pending
+      // now instead of dropping it.
+      void flush();
     };
   }, [flush]);
 

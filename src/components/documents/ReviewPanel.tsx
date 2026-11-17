@@ -1,9 +1,47 @@
 "use client";
 
-import { ArrowRight, CircleCheck, RefreshCw, Sparkles } from "lucide-react";
+import { ArrowRight, Check, CircleCheck, RefreshCw, Sparkles } from "lucide-react";
 import { useState } from "react";
-import { ISSUE_TYPES, scoreLabel, type DocAnalysis, type IssueType, type LocatedIssue } from "@/lib/documents";
+import { ISSUE_TYPES, scoreLabel, type DocAnalysis, type DocBrief, type IssueType, type LocatedIssue } from "@/lib/documents";
+import { REVIEW_STEPS, type ReviewEvent, type ReviewStage } from "@/lib/review/events";
 import { Notice, Spinner } from "../ui";
+
+type Progress = { stage: ReviewStage; detail?: string; done?: number; total?: number; about?: string };
+
+/**
+ * Runs a review: reads the analyze endpoint's progress stream (one JSON
+ * object per line) and resolves with the finished analysis.
+ */
+async function requestReview(documentId: string, onProgress: (p: Progress) => void): Promise<DocAnalysis> {
+  const res = await fetch(`/api/documents/${documentId}/analyze`, { method: "POST" });
+  if (!res.ok || !res.body || !res.headers.get("content-type")?.includes("ndjson")) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? "The review didn’t finish. Please try again.");
+  }
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  let about: string | undefined;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (value) buffer += value;
+    const lines = buffer.split("\n");
+    buffer = done ? "" : lines.pop()!;
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let e: ReviewEvent;
+      try {
+        e = JSON.parse(line) as ReviewEvent;
+      } catch {
+        continue;
+      }
+      if (e.type === "done") return e.analysis;
+      if (e.type === "error") throw new Error(e.error);
+      if (e.stage === "understand" && e.detail) about = e.detail;
+      onProgress({ stage: e.stage, detail: e.detail, done: e.done, total: e.total, about });
+    }
+    if (done) throw new Error("The review was interrupted. Please try again.");
+  }
+}
 
 const DOT: Record<IssueType, string> = {
   spelling: "bg-[#e5372b]",
@@ -54,23 +92,24 @@ export function ReviewPanel({
   onDismiss: (i: LocatedIssue) => void;
 }) {
   const [reviewing, setReviewing] = useState(false);
+  const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<IssueType | "all">("all");
 
   const review = async () => {
     setError(null);
+    setProgress(null);
     setReviewing(true);
     try {
       if (!(await beforeReview())) throw new Error("Couldn’t save your latest changes. Please try again.");
-      const res = await fetch(`/api/documents/${documentId}/analyze`, { method: "POST" });
-      const body = (await res.json().catch(() => ({}))) as { analysis?: DocAnalysis; error?: string };
-      if (!res.ok || !body.analysis) throw new Error(body.error ?? "The review didn’t finish. Please try again.");
-      onReviewed(body.analysis);
+      const analysis = await requestReview(documentId, setProgress);
+      onReviewed(analysis);
       setFilter("all");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "The review didn’t finish. Please try again.");
+      setError(e instanceof Error && e.message !== "Failed to fetch" ? e.message : "The review didn’t finish. Please try again.");
     } finally {
       setReviewing(false);
+      setProgress(null);
     }
   };
 
@@ -98,13 +137,7 @@ export function ReviewPanel({
       {error && <Notice tone="error">{error}</Notice>}
 
       {reviewing ? (
-        <div className="flex flex-col items-center gap-3 rounded-2xl bg-sunken px-4 py-8 text-center" role="status">
-          <Spinner className="h-6 w-6 text-ink-3" />
-          <p className="text-[15px] font-semibold">Reading your document…</p>
-          <p className="text-[13px] leading-relaxed text-ink-3">
-            Checking spelling, grammar, and sentences that don’t make sense or don’t fit. This takes about {minutes} {minutes === 1 ? "minute" : "minutes"}.
-          </p>
-        </div>
+        <ReviewProgress progress={progress} minutes={minutes} />
       ) : !analysis ? (
         <div className="flex flex-col gap-4">
           <p className="text-[14px] leading-relaxed text-ink-3">
@@ -120,6 +153,7 @@ export function ReviewPanel({
         <>
           <ScoreCard score={liveScore ?? analysis.score} original={analysis.score} fixed={fixed} />
           <p className="text-[14px] leading-relaxed text-ink-2">{analysis.summary}</p>
+          {analysis.brief && <BriefLine brief={analysis.brief} />}
           {stale && (
             <p className="rounded-xl bg-sunken px-3 py-2 text-[13px] leading-relaxed text-ink-3">
               You’ve edited since this review. Flags follow your edits; run <strong className="font-semibold text-ink-2">Review again</strong> for a fresh check.
@@ -162,6 +196,59 @@ export function ReviewPanel({
         </>
       )}
     </aside>
+  );
+}
+
+/** The review's stages, ticked off as they finish. */
+function ReviewProgress({ progress, minutes }: { progress: Progress | null; minutes: number }) {
+  const current = progress ? REVIEW_STEPS.findIndex((s) => s.stage === progress.stage) : 0;
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl bg-sunken px-4 py-4" role="status" aria-live="polite">
+      <ol className="flex flex-col gap-2.5">
+        {REVIEW_STEPS.map((step, i) => {
+          const state = i < current ? "done" : i === current ? "now" : "next";
+          let note: string | null = null;
+          if (step.stage === "understand" && progress?.about && i <= current) note = progress.about;
+          if (step.stage === "check" && state === "now" && progress?.total && progress.total > 1) note = `Part ${Math.min(progress.done! + 1, progress.total)} of ${progress.total}`;
+          return (
+            <li key={step.stage} className="flex items-start gap-2.5">
+              <span className="mt-px grid h-5 w-5 flex-none place-items-center">
+                {state === "done" ? (
+                  <span className="grid h-5 w-5 place-items-center rounded-full bg-ink text-white">
+                    <Check aria-hidden className="h-3 w-3" strokeWidth={3} />
+                  </span>
+                ) : state === "now" ? (
+                  <Spinner className="h-4 w-4 text-ink-2" />
+                ) : (
+                  <span className="h-2 w-2 rounded-full bg-ink-4/50" />
+                )}
+              </span>
+              <span className="min-w-0">
+                <span className={`block text-[14px] leading-5 ${state === "next" ? "text-ink-4" : state === "now" ? "font-semibold text-ink" : "text-ink-2"}`}>
+                  {step.label}
+                  <span className="sr-only">{state === "done" ? " — done" : state === "now" ? " — in progress" : ""}</span>
+                </span>
+                {note && <span className="block truncate text-[13px] text-ink-3">{note}</span>}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      <p className="border-t border-line pt-3 text-[12px] leading-relaxed text-ink-3">
+        Usually about {minutes} {minutes === 1 ? "minute" : "minutes"}. You can keep reading while Mira works.
+      </p>
+    </div>
+  );
+}
+
+/** What the review understood the document to be — every flag was judged against this. */
+function BriefLine({ brief }: { brief: DocBrief }) {
+  const tone = { formal: "Formal", neutral: "Neutral", casual: "Casual" }[brief.tone] ?? brief.tone;
+  return (
+    <p className="text-[12px] leading-relaxed text-ink-3">
+      <span className="font-semibold text-ink-2">Read as </span>
+      {brief.kind.replace(/\.$/, "")} · {tone} · {brief.variety} English
+    </p>
   );
 }
 

@@ -16,6 +16,19 @@ export type DocIssue = {
   /** Replacement for `quote`, or null when there is no simple fix. */
   suggestion: string | null;
   explanation: string;
+  /** Found by a rule (certain) or by the AI (judgement). Older reviews: unset. */
+  source?: "rule" | "ai";
+};
+
+/** What the review understood the document to be — the context every flag is judged against. */
+export type DocBrief = {
+  /** "a letter to a customer", "a quarterly report" */
+  kind: string;
+  purpose: string;
+  audience: string;
+  tone: "formal" | "neutral" | "casual";
+  /** "British", "American", "Nigerian"… */
+  variety: string;
 };
 
 export type DocAnalysis = {
@@ -26,6 +39,9 @@ export type DocAnalysis = {
   word_count: number;
   content_hash: string;
   analyzed_at: string;
+  /** Pipeline reviews only (older reviews don't have these). */
+  brief?: DocBrief | null;
+  pipeline?: { version: number; parts: number; stages: { stage: string; ms: number }[] };
 };
 
 export type DocumentRow = {
@@ -204,7 +220,8 @@ function looseRegex(s: string) {
   return new RegExp(body, "g");
 }
 
-function findAll(text: string, needle: string): { start: number; end: number }[] {
+/** Every place `needle` appears in `text`, tolerating quote/dash/spacing differences. */
+export function findAll(text: string, needle: string): { start: number; end: number }[] {
   if (!needle.trim()) return [];
   const out: { start: number; end: number }[] = [];
   const re = looseRegex(needle);

@@ -1,6 +1,6 @@
 import "server-only";
 import { ISSUE_TYPES, type IssueType } from "./documents";
-import { modelChain, type Attempt } from "./proofread";
+import { modelChain, type Attempt } from "./review/gemini";
 import type { ReviewOutcome } from "./review-log";
 import { createAdminClient } from "./supabase/admin";
 import { dailyCounts, type Clock, type DayCount } from "./time";
@@ -76,6 +76,9 @@ export type ReviewStats = {
 };
 
 const DAY = 86_400_000;
+
+/** A backup model had to step in at some stage of this review. */
+const fellBack = (r: { attempts: Attempt[] | null }) => (r.attempts ?? []).some((a) => a.result !== "ok");
 
 const percentile = (sorted: number[], p: number) =>
   sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] : null;
@@ -154,7 +157,7 @@ export async function getReviewStats(clock: Clock): Promise<ReviewStats> {
       successRate: week.length ? weekOk.length / week.length : null,
       medianMs: percentile(times, 0.5),
       p90Ms: percentile(times, 0.9),
-      backupShare: weekOk.length ? weekOk.filter((r) => (r.attempts?.length ?? 1) > 1).length / weekOk.length : null,
+      backupShare: weekOk.length ? weekOk.filter(fellBack).length / weekOk.length : null,
     },
     daily: dailyCounts(
       real.map((r) => r.created_at),
@@ -182,7 +185,7 @@ export async function getReviewStats(clock: Clock): Promise<ReviewStats> {
       isTest: r.is_test,
       outcome: r.outcome,
       model: r.model,
-      backup: (r.attempts?.length ?? 1) > 1,
+      backup: fellBack(r),
       words: r.words,
       issues: r.issues,
       score: r.score,

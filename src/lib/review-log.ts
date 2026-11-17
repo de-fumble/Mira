@@ -1,6 +1,7 @@
 import "server-only";
 import { ISSUE_TYPES, type IssueType } from "./documents";
-import { ReviewBusyError, ReviewError, ReviewUnavailableError, type Attempt, type ReviewMeta } from "./proofread";
+import { ReviewBusyError, ReviewError, ReviewUnavailableError, type Attempt } from "./review/gemini";
+import type { ReviewMeta } from "./review/pipeline";
 import { createAdminClient } from "./supabase/admin";
 
 export type ReviewOutcome = "ok" | "busy" | "failed" | "unavailable";

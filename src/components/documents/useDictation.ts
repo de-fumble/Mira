@@ -78,8 +78,36 @@ export function useDictation({
     wakeRef.current = null;
   };
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => () => release(), []);
+  // Next.js hides the editor (rather than removing it) when you leave the
+  // document, and shows the same one when you come back. Leaving mid-dictation
+  // stops it cleanly: the words already typed stay, and the editor isn't left
+  // stuck in "listening". (A clean-up that's already polishing finishes on its own.)
+  const phaseRef = useRef<DictationPhase>("idle");
+  const visibleRef = useRef(true);
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+  useEffect(() => {
+    visibleRef.current = true;
+    return () => {
+      visibleRef.current = false;
+      const p = phaseRef.current;
+      if (p === "polishing") return;
+      const recorder = recorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.ondataavailable = null;
+        recorder.stop();
+      }
+      release();
+      chunksRef.current = [];
+      if (p === "listening") {
+        setInterim("");
+        setPhase("idle");
+        callbacks.current.onPolished(null, "Dictation stopped when you left the document. Everything up to that point is kept.");
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /** Mic level → CSS variable --level (0–1) on the element given to levelRef. */
   const startMeter = (stream: MediaStream) => {
@@ -137,6 +165,12 @@ export function useDictation({
       return fail("Couldn’t reach the transcription service. Check your internet connection and try again.");
     }
     wsRef.current = ws;
+    if (!visibleRef.current) {
+      // Left the document while dictation was starting.
+      release();
+      setPhase("idle");
+      return false;
+    }
     ws.onmessage = (event) => {
       let msg: Result;
       try {

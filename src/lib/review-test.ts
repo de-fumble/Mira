@@ -1,6 +1,6 @@
 import "server-only";
 import { countWords } from "./documents";
-import { proofread } from "./proofread";
+import { runReview } from "./review/pipeline";
 import { logReview, outcomeOf, type ReviewOutcome } from "./review-log";
 
 /** A short paragraph with nine planted mistakes, like a rushed dictation. */
@@ -30,20 +30,20 @@ export async function runEngineTest(userId: string | null): Promise<EngineTestRe
   const words = countWords(SAMPLE);
   const started = Date.now();
   try {
-    const { review, meta } = await proofread("Test review", SAMPLE);
+    const { issues, meta } = await runReview({ title: "Test review", content: SAMPLE });
     const ms = Date.now() - started;
-    await logReview({ userId, documentId: null, isTest: true, words, durationMs: ms, meta, issues: review.issues, score: null });
-    const lines = review.issues.map((i) => `${i.quote} → ${i.suggestion ?? ""} || ${i.sentence}`);
+    await logReview({ userId, documentId: null, isTest: true, words, durationMs: ms, meta, issues, score: null });
+    const lines = issues.map((i) => `${i.quote} → ${i.suggestion ?? ""} || ${i.sentence}`);
     const hit = PLANTED.filter((p) => lines.some((l) => p.test.test(l)));
     return {
       ok: true,
       model: meta.model,
-      backup: meta.attempts.length > 1,
+      backup: meta.fellBack,
       ms,
       caught: hit.length,
       total: PLANTED.length,
       missed: PLANTED.filter((p) => !hit.includes(p)).map((p) => p.label),
-      extra: Math.max(0, review.issues.length - hit.length),
+      extra: Math.max(0, issues.length - hit.length),
     };
   } catch (err) {
     const ms = Date.now() - started;

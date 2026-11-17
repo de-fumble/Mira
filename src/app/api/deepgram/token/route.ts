@@ -28,19 +28,38 @@ export async function POST() {
     );
   }
 
-  const res = await fetch("https://api.deepgram.com/v1/auth/grant", {
-    method: "POST",
-    headers: { Authorization: `Token ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ ttl_seconds: 30 }),
-    cache: "no-store",
-  });
+  // Time-limited, so a slow Deepgram never leaves someone stuck on "Connecting…".
+  let res: Response;
+  const started = Date.now();
+  try {
+    res = await fetch("https://api.deepgram.com/v1/auth/grant", {
+      method: "POST",
+      headers: { Authorization: `Token ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ ttl_seconds: 30 }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (err) {
+    const timedOut = err instanceof Error && err.name === "TimeoutError";
+    console.error(`Deepgram token grant ${timedOut ? "timed out" : "failed to connect"} after ${Date.now() - started} ms`, err);
+    return NextResponse.json(
+      { error: "The transcription service didn’t respond. Please try again in a moment." },
+      { status: 504 },
+    );
+  }
 
   if (!res.ok) {
-    console.error("Deepgram token grant failed", res.status, await res.text());
-    return NextResponse.json(
-      { error: "Couldn't connect to the transcription service. Check DEEPGRAM_API_KEY." },
-      { status: 502 },
-    );
+    // Shows up in the server logs (e.g. Vercel → Logs) with Deepgram's own reason.
+    console.error("Deepgram token grant failed", res.status, (await res.text()).slice(0, 500));
+    const error =
+      res.status === 429
+        ? "The transcription service is at its limit right now. Please try again in a minute."
+        : res.status === 401 || res.status === 403
+          ? "Live transcription isn’t set up correctly: the Deepgram key was rejected (it needs the Member role or higher)."
+          : res.status === 402
+            ? "Live transcription is paused: the Deepgram account is out of credit."
+            : "Couldn't connect to the transcription service. Please try again.";
+    return NextResponse.json({ error }, { status: 502 });
   }
 
   const { access_token } = (await res.json()) as { access_token: string };

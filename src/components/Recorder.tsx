@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowDown, Check, Mic, Pause, Play, Square, Trash } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MIME_CANDIDATES, openDeepgram } from "@/lib/deepgram-client";
@@ -39,6 +40,34 @@ type DeepgramResult = {
 
 const now = () => Date.now();
 
+/** The steps a recording goes through before it starts — each shown on screen and time-limited. */
+type StartStep = "mic" | "account" | "transcription" | "meeting";
+const START_LABEL: Record<StartStep, string> = {
+  mic: "Opening your microphone…",
+  account: "Checking your account…",
+  transcription: "Connecting to live transcription…",
+  meeting: "Starting the meeting…",
+};
+
+class StepTimeout extends Error {}
+
+/** Rejects with StepTimeout if `promise` hasn't settled within `ms`. */
+function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new StepTimeout()), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 function defaultTitle() {
   const when = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }).format(
     new Date(),
@@ -56,6 +85,7 @@ export function Recorder({ aiNotes = true, saveAudio = true }: { aiNotes?: boole
   const supabase = useRef(createClient()).current;
 
   const [phase, setPhase] = useState<Phase>("idle");
+  const [startStep, setStartStep] = useState<StartStep>("mic");
   const [saveStep, setSaveStep] = useState<SaveStep>(0);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -66,6 +96,17 @@ export function Recorder({ aiNotes = true, saveAudio = true }: { aiNotes?: boole
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const [following, setFollowing] = useState(true);
+  /** A recording that was saved after you left this screen mid-recording. */
+  const [savedWhileAway, setSavedWhileAway] = useState<string | null>(null);
+
+  // Next.js keeps this screen alive (hidden) when you leave it and shows the
+  // same instance when you come back — see the lifecycle effect below.
+  const phaseRef = useRef<Phase>("idle");
+  const visibleRef = useRef(true);
+  const savedRef = useRef(false);
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
 
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -220,10 +261,6 @@ export function Recorder({ aiNotes = true, saveAudio = true }: { aiNotes?: boole
     releaseWakeLock();
   };
 
-  // Unmount only: stop the mic, socket and wake lock if the user navigates away.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => () => releaseMedia(), []);
-
   // Warn before closing the tab mid-recording or while saving.
   useEffect(() => {
     if (!live && phase !== "saving") return;
@@ -247,6 +284,8 @@ export function Recorder({ aiNotes = true, saveAudio = true }: { aiNotes?: boole
   /* ---------------- Start ---------------- */
 
   const start = async () => {
+    setSavedWhileAway(null);
+    savedRef.current = false;
     setError(null);
     setWarning(null);
     setCanRetrySave(false);
@@ -265,39 +304,72 @@ export function Recorder({ aiNotes = true, saveAudio = true }: { aiNotes?: boole
       setError(message);
       setPhase("idle");
     };
+    // Left the screen while it was still starting: let go of everything quietly.
+    const left = () => {
+      if (visibleRef.current) return false;
+      releaseMedia();
+      setPhase("idle");
+      return true;
+    };
 
-    // 1. Microphone
+    // Every step below is time-limited, so starting can never hang: if a step
+    // stalls, the writer is told which one and can simply try again.
+
+    // 1. Microphone (generous: the writer may be reading a permission prompt)
+    setStartStep("mic");
     let stream: MediaStream;
+    const mic = navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-    } catch {
+      stream = await within(mic, 30_000);
+    } catch (err) {
+      if (err instanceof StepTimeout) {
+        // If permission arrives after we gave up, switch the mic straight off again.
+        void mic.then((s) => s.getTracks().forEach((t) => t.stop())).catch(() => {});
+        return fail("The microphone didn’t open. If your browser is asking for permission, tap Allow. If another app is using the microphone, close it. Then try again.");
+      }
       return fail("Mira needs your microphone. Allow access in your browser’s address bar, then try again.");
     }
     streamRef.current = stream;
+    if (left()) return;
 
     // 2. Signed-in user
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth.user) {
-      releaseMedia();
-      router.push("/login");
-      return;
+    setStartStep("account");
+    let userId: string;
+    try {
+      const { data: auth } = await within(supabase.auth.getUser(), 15_000);
+      if (!auth.user) {
+        releaseMedia();
+        router.push("/login");
+        return;
+      }
+      userId = auth.user.id;
+    } catch {
+      return fail("Couldn’t check your account — the connection is slow or offline. Please try again.");
     }
 
-    // 3. Transcription connection
-    const tokenRes = await fetch("/api/deepgram/token", { method: "POST" });
-    const tokenBody = (await tokenRes.json().catch(() => ({}))) as { token?: string; error?: string };
-    if (!tokenRes.ok || !tokenBody.token) {
-      return fail(tokenBody.error ?? "Couldn’t start live transcription. Please try again.");
+    // 3. Transcription connection: a short-lived pass from our server, then the live socket.
+    setStartStep("transcription");
+    let token: string;
+    try {
+      const tokenRes = await fetch("/api/deepgram/token", { method: "POST", signal: AbortSignal.timeout(15_000) });
+      const tokenBody = (await tokenRes.json().catch(() => ({}))) as { token?: string; error?: string };
+      if (!tokenRes.ok || !tokenBody.token) {
+        return fail(tokenBody.error ?? "Couldn’t start live transcription. Please try again.");
+      }
+      token = tokenBody.token;
+    } catch {
+      return fail("Live transcription didn’t respond in time. Please try again in a moment.");
     }
     let ws: WebSocket;
     try {
-      ws = await openDeepgram(DEEPGRAM_URL, tokenBody.token);
+      ws = await openDeepgram(DEEPGRAM_URL, token);
     } catch {
-      return fail("Couldn’t reach the transcription service. Check your internet connection and try again.");
+      return fail("Couldn’t connect to live transcription. Check your internet connection and try again.");
     }
     wsRef.current = ws;
+    if (left()) return;
 
     ws.onmessage = (event) => {
       let msg: DeepgramResult;
@@ -326,13 +398,19 @@ export function Recorder({ aiNotes = true, saveAudio = true }: { aiNotes?: boole
     };
 
     // 4. Meeting record (Row Level Security fills in user_id)
+    setStartStep("meeting");
     const { data: meeting, error: insertError } = await supabase
       .from("meetings")
       .insert({ title: defaultTitle() })
       .select("id")
+      .abortSignal(AbortSignal.timeout(15_000))
       .single();
-    if (insertError || !meeting) return fail("Couldn’t create the meeting. Please try again.");
-    meetingRef.current = { id: meeting.id, userId: auth.user.id };
+    if (insertError || !meeting) return fail("Couldn’t create the meeting — the connection is slow or offline. Please try again.");
+    if (left()) {
+      void supabase.from("meetings").delete().eq("id", meeting.id); // nothing was recorded
+      return;
+    }
+    meetingRef.current = { id: meeting.id, userId };
 
     // 5. Record: each 250 ms chunk goes to Deepgram and into the saved file.
     const mimeType = MIME_CANDIDATES.find((m) => MediaRecorder.isTypeSupported(m)) ?? "";
@@ -456,7 +534,34 @@ export function Recorder({ aiNotes = true, saveAudio = true }: { aiNotes?: boole
     }
 
     setSaveStep(3);
-    router.push(`/meetings/${meeting.id}`);
+    savedRef.current = true;
+    if (visibleRef.current) {
+      router.push(`/meetings/${meeting.id}`);
+    } else {
+      // Saved after the writer left this screen: start fresh, with a link to it.
+      reset();
+      setSavedWhileAway(meeting.id);
+    }
+  };
+
+  /** Back to a fresh, ready-to-record screen. */
+  const reset = () => {
+    meetingRef.current = null;
+    recorderRef.current = null;
+    chunksRef.current = [];
+    segmentsRef.current = [];
+    closingRef.current = false;
+    savedRef.current = false;
+    setSegments([]);
+    setInterim("");
+    setElapsed(0);
+    setError(null);
+    setWarning(null);
+    setCanRetrySave(false);
+    setSaveStep(0);
+    setFollowing(true);
+    setConfirmDiscard(false);
+    setPhase("idle");
   };
 
   /* ---------------- Discard ---------------- */
@@ -479,6 +584,29 @@ export function Recorder({ aiNotes = true, saveAudio = true }: { aiNotes?: boole
     setConfirmDiscard(false);
     setPhase("idle");
   };
+
+  /* ---------------- Leaving and coming back ---------------- */
+
+  // Next.js doesn't remove this screen when you leave it: it hides it and
+  // shows the same one when you come back. Leaving runs this cleanup; coming
+  // back runs the setup again. So:
+  //  - a meeting that finished saving → next visit starts fresh;
+  //  - left mid-recording → stop and save it (nothing is lost), quietly;
+  //  - left while starting or idle → let go of the microphone.
+  useLayoutEffect(() => {
+    visibleRef.current = true;
+    return () => {
+      visibleRef.current = false;
+      const p = phaseRef.current;
+      if (p === "recording" || p === "paused") void stop();
+      else if (p === "saving") {
+        if (savedRef.current) reset();
+        // Still saving: it finishes on its own and resets itself (see save()).
+      } else releaseMedia();
+    };
+    // Runs once per show/hide; the functions only use refs and state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ---------------- UI ---------------- */
 
@@ -576,7 +704,7 @@ export function Recorder({ aiNotes = true, saveAudio = true }: { aiNotes?: boole
 
         <p className={`mt-4 text-center text-[15px] text-ink-3 ${dock ? "max-sm:hidden" : ""}`} aria-live="polite">
           {phase === "idle" && "Tap to start recording"}
-          {phase === "starting" && "Connecting your microphone…"}
+          {phase === "starting" && START_LABEL[startStep]}
           {phase === "recording" && "Recording — tap the red button when you’re done"}
           {phase === "paused" && "Paused — nothing is being recorded"}
           {phase === "saving" && " "}
@@ -601,6 +729,22 @@ export function Recorder({ aiNotes = true, saveAudio = true }: { aiNotes?: boole
             ) : (
               <Notice tone="warn">{warning}</Notice>
             )}
+          </div>
+        )}
+
+        {phase === "idle" && !error && savedWhileAway && (
+          <div className={`mx-auto mt-6 max-w-lg ${dock ? "max-sm:mt-3" : ""}`}>
+            <Notice
+              tone="success"
+              title="Your last recording was saved"
+              action={
+                <Link href={`/meetings/${savedWhileAway}`} className="btn btn-sm btn-secondary">
+                  Open it
+                </Link>
+              }
+            >
+              You left this screen while recording, so Mira stopped and saved it for you.
+            </Notice>
           </div>
         )}
       </section>

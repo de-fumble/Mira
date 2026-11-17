@@ -1,6 +1,8 @@
-import { after, NextResponse } from "next/server";
-import { countWords, hashText, REVIEW_MAX_WORDS, scoreFor, type DocAnalysis } from "@/lib/documents";
-import { proofread, ReviewBusyError, ReviewUnavailableError } from "@/lib/proofread";
+import { NextResponse } from "next/server";
+import { countWords, hashText, REVIEW_MAX_WORDS, type DocAnalysis } from "@/lib/documents";
+import type { ReviewEvent } from "@/lib/review/events";
+import { ReviewBusyError, ReviewUnavailableError } from "@/lib/review/gemini";
+import { PIPELINE_VERSION, runReview } from "@/lib/review/pipeline";
 import { logReview } from "@/lib/review-log";
 import { createClient } from "@/lib/supabase/server";
 
@@ -8,9 +10,14 @@ import { createClient } from "@/lib/supabase/server";
 export const maxDuration = 300;
 
 /**
- * POST /api/documents/:id/analyze — AI proofreading of the saved text:
- * flags spelling, grammar, unclear and off-topic sentences and scores the
- * document. Row Level Security limits this to the owner's documents.
+ * POST /api/documents/:id/analyze — runs the correction engine on the saved
+ * text (see lib/review/pipeline.ts) and saves the result.
+ *
+ * Answers with a stream of newline-separated JSON (ReviewEvent): a "stage"
+ * line as each step starts or progresses, then one "done" line with the
+ * analysis, or an "error" line. Problems found before the review starts
+ * (signed out, missing, too short or long) are plain JSON with a status code.
+ * Row Level Security limits this to the owner's documents.
  */
 export async function POST(_req: Request, ctx: RouteContext<"/api/documents/[id]/analyze">) {
   const { id } = await ctx.params;
@@ -31,36 +38,61 @@ export async function POST(_req: Request, ctx: RouteContext<"/api/documents/[id]
   }
 
   const userId = claims.claims.sub;
-  const started = Date.now();
-  let reviewed = false;
-  try {
-    const { review, meta } = await proofread(doc.title, doc.content);
-    const issues = review.issues.map((issue, i) => ({ ...issue, id: `${Date.now().toString(36)}-${i}` }));
-    const score = scoreFor(issues, words);
-    reviewed = true;
-    // For the admin dashboard — after the reply, so it never slows the review.
-    const durationMs = Date.now() - started;
-    after(() => logReview({ userId, documentId: id, words, durationMs, meta, issues, score }));
-    const analysis: DocAnalysis = {
-      score,
-      summary: review.summary,
-      issues,
-      dismissed: [],
-      word_count: words,
-      content_hash: hashText(doc.content),
-      analyzed_at: new Date().toISOString(),
-    };
-    const { error } = await supabase.from("documents").update({ analysis }).eq("id", id);
-    if (error) throw error;
-    return NextResponse.json({ analysis });
-  } catch (err) {
-    if (!reviewed) {
-      const durationMs = Date.now() - started;
-      after(() => logReview({ userId, documentId: id, words, durationMs, error: err }));
-    }
-    if (err instanceof ReviewUnavailableError) return NextResponse.json({ error: err.message }, { status: 503 });
-    if (err instanceof ReviewBusyError) return NextResponse.json({ error: err.message }, { status: 429 });
-    console.error("Document review failed", err);
-    return NextResponse.json({ error: "The review didn’t finish. Please try again." }, { status: 500 });
-  }
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let open = true;
+      const send = (e: ReviewEvent) => {
+        if (!open) return;
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(e) + "\n"));
+        } catch {
+          open = false; // the writer closed the page; keep going so the review is still saved
+        }
+      };
+      const started = Date.now();
+      let reviewed = false;
+      try {
+        const result = await runReview({ title: doc.title, content: doc.content, onProgress: send });
+        reviewed = true;
+        const stamp = Date.now().toString(36);
+        const issues = result.issues.map((issue, i) => ({ ...issue, id: `${stamp}-${i}` }));
+        const analysis: DocAnalysis = {
+          score: result.score,
+          summary: result.summary,
+          issues,
+          dismissed: [],
+          word_count: words,
+          content_hash: hashText(doc.content),
+          analyzed_at: new Date().toISOString(),
+          brief: result.brief,
+          pipeline: { version: PIPELINE_VERSION, parts: result.parts, stages: result.stages },
+        };
+        const { error } = await supabase.from("documents").update({ analysis }).eq("id", id);
+        if (error) throw error;
+        send({ type: "done", analysis });
+        // For the admin dashboard (never throws).
+        await logReview({ userId, documentId: id, words, durationMs: Date.now() - started, meta: result.meta, issues, score: result.score });
+      } catch (err) {
+        if (!reviewed) await logReview({ userId, documentId: id, words, durationMs: Date.now() - started, error: err });
+        if (err instanceof ReviewUnavailableError) send({ type: "error", error: err.message, status: 503 });
+        else if (err instanceof ReviewBusyError) send({ type: "error", error: err.message, status: 429 });
+        else {
+          console.error("Document review failed", err);
+          send({ type: "error", error: "The review didn’t finish. Please try again.", status: 500 });
+        }
+      } finally {
+        if (open) controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store",
+      // Don't let proxies hold the progress lines back.
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
