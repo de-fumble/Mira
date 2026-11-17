@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { createDocument } from "@/app/document-actions";
 import { NewDocumentButton } from "@/components/documents/NewDocumentButton";
+import { NAV_FORWARD } from "@/components/PageTransition";
 import { Notice } from "@/components/ui";
 import { scoreLabel, type DocAnalysis } from "@/lib/documents";
 import { createClient } from "@/lib/supabase/server";
@@ -13,23 +14,27 @@ export const metadata: Metadata = { title: "Documents" };
 
 export default function DocumentsPage(props: PageProps<"/documents">) {
   return (
-    <div className="flex flex-col gap-6 sm:gap-8">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="eyebrow">Speech to document</p>
-          <h1 className="mt-1 text-[32px] font-semibold leading-tight tracking-[-0.03em] sm:text-[38px]">Documents</h1>
-          <p className="mt-1.5 max-w-xl text-[16px] text-ink-3">
-            Talk instead of typing. Mira writes it down, checks it, and gives you a Word or PDF file.
-          </p>
-        </div>
-        <form action={createDocument}>
-          <NewDocumentButton />
-        </form>
-      </header>
-      <Suspense fallback={<ListSkeleton />}>
-        <DocumentList searchParams={props.searchParams} />
-      </Suspense>
-    </div>
+    <>
+      <div className="flex flex-col gap-6 sm:gap-8">
+        <header className="flex items-end justify-between gap-4">
+          <div className="min-w-0">
+            <p className="eyebrow">Speech to document</p>
+            <h1 className="mt-1 text-[32px] font-semibold leading-[1.1] tracking-[-0.035em] sm:text-[38px] sm:leading-tight sm:tracking-[-0.03em]">
+              Documents
+            </h1>
+            <p className="mt-1.5 max-w-xl text-[16px] text-ink-3 max-sm:hidden">
+              Talk instead of typing. Mira writes it down, checks it, and gives you a Word or PDF file.
+            </p>
+          </div>
+          <form action={createDocument} className="flex-none">
+            <NewDocumentButton shortLabel="New" />
+          </form>
+        </header>
+        <Suspense fallback={<ListSkeleton />}>
+          <DocumentList searchParams={props.searchParams} />
+        </Suspense>
+      </div>
+    </>
   );
 }
 
@@ -62,19 +67,22 @@ async function DocumentList({ searchParams }: { searchParams: PageProps<"/docume
       {docs.length === 0 ? (
         <EmptyState />
       ) : (
-        <ul className="flex flex-col gap-2.5 sm:gap-3">
+        <ul className="inset-list flex flex-col sm:gap-3">
           {docs.map((d, i) => (
             <li key={d.id} className="stagger" style={{ "--i": Math.min(i, 10) } as React.CSSProperties}>
               <Link
                 href={`/documents/${d.id}`}
-                className="group card flex items-center gap-3 px-4 py-3.5 transition-[box-shadow,transform] duration-300 ease-[var(--ease-out)] active:scale-[0.99] sm:gap-5 sm:p-5 sm:hover:-translate-y-px sm:hover:shadow-[var(--shadow-card-hover)]"
+                transitionTypes={NAV_FORWARD}
+                className="row-link group flex items-center gap-3 px-4 py-3 transition-[box-shadow,transform,background-color] duration-200 ease-[var(--ease-out)] active:bg-sunken sm:gap-5 sm:rounded-[var(--radius-card)] sm:bg-surface sm:p-5 sm:shadow-[var(--shadow-card)] sm:active:scale-[0.99] sm:hover:-translate-y-px sm:hover:shadow-[var(--shadow-card-hover)]"
               >
                 <span className="hidden h-12 w-12 flex-none place-items-center rounded-2xl bg-sunken text-ink-2 transition-colors group-hover:bg-ink group-hover:text-white sm:grid">
                   <FileText aria-hidden className="h-[22px] w-[22px]" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="line-clamp-2 text-[17px] font-semibold leading-snug tracking-tight sm:line-clamp-1">{d.title}</span>
-                  <span className="mt-0.5 block truncate text-[15px] text-ink-3">
+                  <span className="line-clamp-2 text-[16px] font-semibold leading-snug tracking-[-0.01em] sm:line-clamp-1 sm:text-[17px] sm:tracking-tight">
+                    {d.title}
+                  </span>
+                  <span className="mt-0.5 block truncate text-[14px] text-ink-3 sm:text-[15px]">
                     {d.content.trim() ? d.content.trim().slice(0, 180) : "Empty — open it and start dictating."}
                   </span>
                   <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] tabular-nums text-ink-4">
@@ -83,7 +91,7 @@ async function DocumentList({ searchParams }: { searchParams: PageProps<"/docume
                     {d.analysis && <ScoreChip score={d.analysis.score} />}
                   </span>
                 </span>
-                <ChevronRight aria-hidden className="h-5 w-5 flex-none text-ink-4 transition group-hover:translate-x-0.5 group-hover:text-ink-2" />
+                <ChevronRight aria-hidden className="h-5 w-5 flex-none text-ink-4 transition group-hover:translate-x-0.5 group-hover:text-ink-2 max-sm:hidden" />
               </Link>
             </li>
           ))}
@@ -142,11 +150,21 @@ function EmptyState() {
 
 function ListSkeleton() {
   return (
-    <div className="flex flex-col gap-3" aria-hidden>
-      {[0, 1, 2].map((i) => (
-        <div key={i} className="skeleton h-[92px] rounded-[var(--radius-card)]" />
-      ))}
+    <div aria-hidden>
+      <div className="divide-y divide-line overflow-hidden rounded-[20px] bg-surface sm:hidden">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="space-y-2 px-4 py-3.5">
+            <div className="skeleton h-4 w-3/5" />
+            <div className="skeleton h-3.5 w-4/5" />
+            <div className="skeleton h-3 w-24" />
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-col gap-3 max-sm:hidden">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="skeleton h-[92px] rounded-[var(--radius-card)]" />
+        ))}
+      </div>
     </div>
   );
 }
-

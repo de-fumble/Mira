@@ -12,7 +12,7 @@ export function Logo() {
   return (
     <span className="inline-flex items-center gap-2">
       <LogoMark />
-      <span className="text-[21px] font-semibold tracking-[-0.04em] max-[400px]:hidden">mira</span>
+      <span className="text-[21px] font-semibold tracking-[-0.04em]">mira</span>
     </span>
   );
 }

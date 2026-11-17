@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { DocumentEditor } from "@/components/documents/DocumentEditor";
+import { NAV_BACK } from "@/components/PageTransition";
 import type { DocumentRow } from "@/lib/documents";
 import { getFeatures } from "@/lib/features";
 import { createClient } from "@/lib/supabase/server";
@@ -15,7 +16,8 @@ export default function DocumentPage(props: PageProps<"/documents/[id]">) {
     <>
       <Link
         href="/documents"
-        className="tap -ml-2 mb-4 inline-flex h-11 items-center gap-1 rounded-full pl-1.5 pr-3.5 text-[15px] font-medium text-ink-3 transition hover:bg-hover hover:text-ink active:bg-hover sm:mb-6 sm:h-9"
+        transitionTypes={NAV_BACK}
+        className="tap -ml-2 mb-3 inline-flex h-11 items-center gap-1 rounded-full pl-1.5 pr-3.5 text-[15px] font-medium text-ink-3 transition hover:bg-hover hover:text-ink active:bg-hover sm:mb-6 sm:h-9"
       >
         <ChevronLeft aria-hidden className="h-[18px] w-[18px]" />
         Documents

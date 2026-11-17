@@ -17,8 +17,8 @@ import Link from "next/link";
 import { after } from "next/server";
 import { Suspense, type ReactNode } from "react";
 import { BarChart } from "@/components/admin/BarChart";
-import { MobileRecordButton } from "@/components/AppHeader";
 import { MeetingCard, type MeetingCardData } from "@/components/MeetingCard";
+import { NAV_FORWARD } from "@/components/PageTransition";
 import { SearchField } from "@/components/SearchField";
 import { Notice } from "@/components/ui";
 import { displayName } from "@/lib/account";
@@ -34,7 +34,7 @@ const DAY = 86_400_000;
 export default function HomePage(props: PageProps<"/">) {
   return (
     <>
-      <div className="mb-7 flex flex-col gap-4 sm:mb-9 sm:flex-row sm:items-end sm:justify-between sm:gap-5">
+      <div className="mb-6 flex flex-col gap-4 sm:mb-9 sm:flex-row sm:items-end sm:justify-between sm:gap-5">
         <Suspense fallback={<HeadingSkeleton />}>
           <Greeting />
         </Suspense>
@@ -58,7 +58,7 @@ async function Greeting() {
   return (
     <div className="min-w-0">
       <p className="eyebrow">{formatDate(now.toISOString(), clock)}</p>
-      <h1 className="mt-1.5 truncate text-[30px] font-semibold leading-tight tracking-[-0.03em] sm:text-[38px]">
+      <h1 className="mt-1 line-clamp-2 text-[32px] font-semibold leading-[1.1] tracking-[-0.035em] sm:mt-1.5 sm:truncate sm:text-[38px] sm:leading-tight sm:tracking-[-0.03em]">
         {greeting(clock, now)}, {displayName(viewer.username, viewer.email)}
       </h1>
     </div>
@@ -128,20 +128,15 @@ async function Dashboard({ searchParams }: { searchParams: PageProps<"/">["searc
   if (error) return <Notice tone="error" title="Couldn’t load your meetings">{error.message}</Notice>;
 
   if (q) {
-    return (
-      <>
-        {data.length ? (
-          <div className="flex flex-col gap-5">
-            <p className="text-[15px] text-ink-3">
-              {data.length} {data.length === 1 ? "result" : "results"} for “{q}”
-            </p>
-            <GroupedList rows={data} clock={clock} />
-          </div>
-        ) : (
-          <NoResults q={q} />
-        )}
-        {features.recording && <MobileRecordButton />}
-      </>
+    return data.length ? (
+      <div className="flex flex-col gap-5">
+        <p className="text-[15px] text-ink-3">
+          {data.length} {data.length === 1 ? "result" : "results"} for “{q}”
+        </p>
+        <GroupedList rows={data} clock={clock} />
+      </div>
+    ) : (
+      <NoResults q={q} />
     );
   }
 
@@ -150,9 +145,20 @@ async function Dashboard({ searchParams }: { searchParams: PageProps<"/">["searc
   const { thisWeek, lastWeek, secs, avg, actions, notesReady, latest, daily, fortnight } = summarize(data, clock);
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* KPI row */}
-      <ul aria-label="Your numbers" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+    <div className="flex flex-col gap-8 sm:gap-5">
+      {/* Phones: three numbers, the latest meeting and a few to-dos — nothing else. */}
+      <MobileSummary
+        items={[
+          { value: String(thisWeek.length), label: "this week" },
+          { value: secs(thisWeek) ? formatDuration(secs(thisWeek)) : "0 min", label: "recorded" },
+          { value: String(actions.length), label: actions.length === 1 ? "to-do" : "to-dos" },
+        ]}
+      />
+      <MobileLatest m={latest} clock={clock} />
+      <MobileTodos items={actions.slice(0, 3)} total={actions.length} clock={clock} />
+
+      {/* KPI row (tablet and desktop) */}
+      <ul aria-label="Your numbers" className="grid grid-cols-2 gap-3 max-sm:hidden sm:gap-4 lg:grid-cols-4">
         <Stat index={0} Icon={CalendarDays} label="This week" value={String(thisWeek.length)} unit={thisWeek.length === 1 ? "meeting" : "meetings"}>
           <Trend now={thisWeek.length} before={lastWeek.length} />
         </Stat>
@@ -171,13 +177,13 @@ async function Dashboard({ searchParams }: { searchParams: PageProps<"/">["searc
         </Stat>
       </ul>
 
-      {/* Phones/tablets: latest → side panels → list. Desktop: two columns, panels on the right. */}
+      {/* Tablets: latest → side panels → list. Desktop: two columns, panels on the right. */}
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:grid-rows-[auto_1fr]">
-        <div className="min-w-0 lg:col-start-1 lg:row-start-1">
+        <div className="min-w-0 max-sm:hidden lg:col-start-1 lg:row-start-1">
           <LatestMeeting m={latest} clock={clock} aiNotes={features.ai_notes} />
         </div>
 
-        <aside className="grid items-start gap-5 sm:grid-cols-2 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:grid-cols-1 lg:self-start lg:sticky lg:top-24">
+        <aside className="grid items-start gap-5 max-sm:hidden sm:grid-cols-2 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:grid-cols-1 lg:self-start lg:sticky lg:top-24">
           <RecordCard recording={features.recording} />
           <Panel id="activity" title="Activity" aside={<span className="text-[13px] text-ink-3">Last 14 days</span>}>
             <p className="-mt-1 mb-4 text-[14px] text-ink-3">
@@ -189,21 +195,101 @@ async function Dashboard({ searchParams }: { searchParams: PageProps<"/">["searc
           <ActionItems items={actions.slice(0, 5)} total={actions.length} clock={clock} aiNotes={features.ai_notes} />
         </aside>
 
-        <section aria-labelledby="all-meetings" className="min-w-0 animate-fade-up lg:col-start-1 lg:row-start-2">
-          <div className="mb-4 mt-3 flex items-baseline justify-between px-1">
+        <section aria-labelledby="all-meetings" className="min-w-0 sm:animate-fade-up lg:col-start-1 lg:row-start-2">
+          <div className="mb-3 flex items-baseline justify-between px-1 sm:mb-4 sm:mt-3">
             <h2 id="all-meetings" className="text-[20px] font-semibold tracking-tight">
-              All meetings
+              <span className="sm:hidden">Meetings</span>
+              <span className="max-sm:hidden">All meetings</span>
             </h2>
             <span className="text-[14px] tabular-nums text-ink-3">{data.length}</span>
           </div>
           <GroupedList rows={data} clock={clock} />
         </section>
       </div>
-
-      {features.recording && <MobileRecordButton />}
     </div>
   );
 }
+
+/* ---------------------------------------------------------- Phone layout */
+
+/** Three numbers on one line, no boxes. */
+function MobileSummary({ items }: { items: { value: string; label: string }[] }) {
+  return (
+    <dl className="grid grid-cols-3 sm:hidden">
+      {items.map((i, n) => (
+        <div key={i.label} className={`flex min-w-0 flex-col-reverse ${n ? "border-l border-line pl-4" : "pr-2"}`}>
+          <dt className="mt-0.5 truncate text-[13px] text-ink-3">{i.label}</dt>
+          <dd className="truncate text-[22px] font-semibold leading-tight tracking-[-0.03em] tabular-nums">{i.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** The newest meeting: title, when, and two lines of notes. The whole card is the button. */
+function MobileLatest({ m, clock }: { m: Row; clock: ClockT }) {
+  return (
+    <section aria-labelledby="latest-m" className="sm:hidden">
+      <h2 id="latest-m" className="eyebrow mb-2 px-1">
+        Latest
+      </h2>
+      <Link
+        href={`/meetings/${m.id}`}
+        transitionTypes={NAV_FORWARD}
+        className="row-link block rounded-[22px] bg-surface p-5 shadow-[0_0_0_1px_rgb(0_0_0/0.04),0_8px_24px_-14px_rgb(0_0_0/0.18)] transition-transform duration-200 ease-[var(--ease-out)] active:scale-[0.98]"
+      >
+        <span className="line-clamp-2 text-[19px] font-semibold leading-snug tracking-[-0.02em]">{m.title}</span>
+        <span className="mt-1 block text-[14px] tabular-nums text-ink-3">
+          {dayGroup(m.started_at, new Date(), clock)}, {formatTime(m.started_at, clock)} · {formatDuration(m.duration_seconds)}
+        </span>
+        {m.status === "processing" ? (
+          <span className="mt-3 flex items-center gap-2 text-[15px] text-accent">
+            <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+            Writing notes…
+          </span>
+        ) : (
+          m.snippet && <span className="mt-3 line-clamp-2 text-[15px] leading-relaxed text-ink-2">{m.snippet}</span>
+        )}
+      </Link>
+    </section>
+  );
+}
+
+/** Up to three to-dos from recent notes. Nothing at all when there are none. */
+function MobileTodos({ items, total, clock }: { items: Action[]; total: number; clock: ClockT }) {
+  if (!items.length) return null;
+  return (
+    <section aria-labelledby="todos-m" className="sm:hidden">
+      <div className="mb-2 flex items-baseline justify-between px-1">
+        <h2 id="todos-m" className="eyebrow">
+          To-dos
+        </h2>
+        {total > items.length && <span className="text-[13px] tabular-nums text-ink-3">{total} in all</span>}
+      </div>
+      <ul className="inset-list">
+        {items.map((a, i) => (
+          <li key={i}>
+            <Link
+              href={`/meetings/${a.meetingId}`}
+              transitionTypes={NAV_FORWARD}
+              className="row-link flex gap-3 px-4 py-3 transition-colors duration-200 active:bg-sunken"
+            >
+              <span aria-hidden className="mt-[3px] h-[18px] w-[18px] flex-none rounded-full border-[1.5px] border-ink-4" />
+              <span className="min-w-0">
+                <span className="line-clamp-2 text-[15px] leading-snug">{a.task}</span>
+                <span className="mt-0.5 block truncate text-[13px] text-ink-3">
+                  {[a.owner, a.due, `${formatShortDate(a.at, clock)} · ${a.meetingTitle}`].filter(Boolean).join(" · ")}
+                </span>
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/* ------------------------------------------------- Tablet + desktop layout */
 
 function Stat({
   Icon,
@@ -274,7 +360,7 @@ function LatestMeeting({ m, clock, aiNotes }: { m: Row; clock: ClockT; aiNotes: 
           </span>
         </div>
         <h2 id="latest" className="mt-3 text-[22px] font-semibold leading-snug tracking-[-0.02em] sm:text-[26px]">
-          <Link href={`/meetings/${m.id}`} className="hover:underline hover:decoration-line-strong hover:underline-offset-4">
+          <Link href={`/meetings/${m.id}`} transitionTypes={NAV_FORWARD} className="hover:underline hover:decoration-line-strong hover:underline-offset-4">
             {m.title}
           </Link>
         </h2>
@@ -319,7 +405,7 @@ function LatestMeeting({ m, clock, aiNotes }: { m: Row; clock: ClockT; aiNotes: 
             </span>
           )}
         </span>
-        <Link href={`/meetings/${m.id}`} className="btn btn-sm btn-secondary">
+        <Link href={`/meetings/${m.id}`} transitionTypes={NAV_FORWARD} className="btn btn-sm btn-secondary">
           Open meeting
           <ArrowRight aria-hidden className="h-4 w-4" />
         </Link>
@@ -361,6 +447,7 @@ function ActionItems({ items, total, clock, aiNotes }: { items: Action[]; total:
             <li key={i}>
               <Link
                 href={`/meetings/${a.meetingId}`}
+                transitionTypes={NAV_FORWARD}
                 className="flex gap-3 rounded-xl px-2 py-2.5 transition-colors hover:bg-sunken"
               >
                 <Circle aria-hidden className="mt-0.5 h-4 w-4 flex-none text-ink-4" />
@@ -397,11 +484,12 @@ function GroupedList({ rows, clock }: { rows: Row[]; clock: ClockT }) {
   }
   let index = 0;
   return (
-    <div className="flex flex-col gap-7">
+    <div className="flex flex-col gap-6 sm:gap-7">
       {groups.map((g) => (
         <section key={g.label} aria-label={g.label}>
-          <h3 className="eyebrow mb-3 px-1">{g.label}</h3>
-          <ul className="flex flex-col gap-2.5">
+          <h3 className="eyebrow mb-2 px-1 sm:mb-3">{g.label}</h3>
+          {/* Phones: one grouped list per day. Larger screens: a card per meeting. */}
+          <ul className="inset-list flex flex-col sm:gap-2.5">
             {g.items.map((m) => (
               <MeetingCard key={m.id} m={m} index={index++} />
             ))}
@@ -483,7 +571,38 @@ function HeadingSkeleton() {
 function DashboardSkeleton() {
   return (
     <div aria-busy="true" aria-label="Loading your meetings" className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+      {/* Phones: same shape as the real screen, so nothing jumps when it loads. */}
+      <div className="flex flex-col gap-8 sm:hidden">
+        <div className="grid grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className={`space-y-2 ${i ? "border-l border-line pl-4" : ""}`}>
+              <div className="skeleton h-6 w-12" />
+              <div className="skeleton h-3 w-16" />
+            </div>
+          ))}
+        </div>
+        <div>
+          <div className="skeleton mb-2 ml-1 h-3 w-14" />
+          <div className="space-y-2.5 rounded-[22px] bg-surface p-5">
+            <div className="skeleton h-5 w-4/5" />
+            <div className="skeleton h-3.5 w-32" />
+            <div className="skeleton mt-3 h-3.5 w-full" />
+            <div className="skeleton h-3.5 w-3/5" />
+          </div>
+        </div>
+        <div>
+          <div className="skeleton mb-2 ml-1 h-3 w-16" />
+          <div className="divide-y divide-line overflow-hidden rounded-[20px] bg-surface">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="space-y-2 px-4 py-3.5">
+                <div className="skeleton h-4 w-3/5" />
+                <div className="skeleton h-3.5 w-4/5" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 max-sm:hidden sm:gap-4 lg:grid-cols-4">
         {[0, 1, 2, 3].map((i) => (
           <div key={i} className="card space-y-3 p-5">
             <div className="skeleton h-3.5 w-20" />
@@ -492,7 +611,7 @@ function DashboardSkeleton() {
           </div>
         ))}
       </div>
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid gap-5 max-sm:hidden lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="flex flex-col gap-5">
           <div className="card space-y-3 p-7">
             <div className="skeleton h-3.5 w-28" />

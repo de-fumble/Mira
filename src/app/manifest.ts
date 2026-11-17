@@ -1,12 +1,16 @@
 import type { MetadataRoute } from "next";
 
-// Lets people install Mira to their phone's home screen.
+// Lets people install Mira to their phone's home screen. Android builds its
+// launch screen from this: the icon and `name` on `background_color`.
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Mira — meeting notes",
+    id: "/",
+    name: "Mira",
     short_name: "Mira",
-    description: "Record your meetings and read every word.",
-    start_url: "/",
+    description: "Record meetings and dictate documents — Mira writes every word.",
+    // ?source=pwa: signed-out people opening the app go to sign-in, not the website.
+    start_url: "/?source=pwa",
+    scope: "/",
     display: "standalone",
     orientation: "portrait",
     background_color: "#f5f5f7",

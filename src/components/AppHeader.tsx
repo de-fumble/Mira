@@ -6,9 +6,10 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { signOut } from "@/app/actions";
 import { Logo } from "./Logo";
+import { NAV_TAB } from "./PageTransition";
 import { Spinner } from "./ui";
 
-/** Header record button — desktop/tablet only; phones get MobileRecordButton. */
+/** Header record button — desktop/tablet only; phones use the tab bar (MobileTabBar). */
 export function RecordLink() {
   return (
     <Link href="/record" className="btn btn-md btn-primary max-sm:hidden">
@@ -25,24 +26,9 @@ export function HeaderRecordButton() {
   return path === "/record" ? null : <RecordLink />;
 }
 
-/** Floating, thumb-reachable Record button for phones. */
-export function MobileRecordButton() {
-  return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-safe z-30 flex justify-center sm:hidden">
-      <Link
-        href="/record"
-        className="btn pointer-events-auto h-14 animate-fade-up gap-2.5 bg-ink px-7 text-[17px] text-white shadow-[0_10px_30px_-8px_rgb(0_0_0/0.55)] active:scale-95"
-      >
-        <span aria-hidden className="h-3 w-3 rounded-full bg-rec ring-2 ring-white/90" />
-        Record
-      </Link>
-    </div>
-  );
-}
-
 export function HeaderBrand() {
   return (
-    <Link href="/" aria-label="Mira — all meetings" className="rounded-full transition-opacity hover:opacity-75">
+    <Link href="/" transitionTypes={NAV_TAB} aria-label="Mira — all meetings" className="rounded-full transition-opacity hover:opacity-75 active:opacity-60">
       <Logo />
     </Link>
   );
@@ -62,6 +48,7 @@ function NavLinks({ path }: { path: string | null }) {
           <Link
             key={item.href}
             href={item.href}
+            transitionTypes={NAV_TAB}
             aria-current={on ? "page" : undefined}
             className={`tap rounded-full px-3 py-1.5 text-[14px] font-medium transition sm:px-3.5 ${
               on ? "bg-surface text-ink shadow-[0_1px_3px_rgb(0_0_0/0.12)]" : "text-ink-3 hover:text-ink"

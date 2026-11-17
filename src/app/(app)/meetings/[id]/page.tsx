@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { EditableTitle } from "@/components/EditableTitle";
 import { MeetingActions } from "@/components/MeetingActions";
+import { NAV_BACK } from "@/components/PageTransition";
 import { SummaryGenerator } from "@/components/SummaryGenerator";
 import { TranscriptPlayer } from "@/components/TranscriptPlayer";
 import { Notice } from "@/components/ui";
@@ -17,7 +18,8 @@ export default function MeetingPage(props: PageProps<"/meetings/[id]">) {
     <>
       <Link
         href="/"
-        className="tap -ml-2 mb-4 inline-flex h-11 items-center gap-1 rounded-full pl-1.5 pr-3.5 text-[15px] font-medium text-ink-3 transition hover:bg-hover hover:text-ink active:bg-hover sm:mb-6 sm:h-9"
+        transitionTypes={NAV_BACK}
+        className="tap -ml-2 mb-3 inline-flex h-11 items-center gap-1 rounded-full pl-1.5 pr-3.5 text-[15px] font-medium text-ink-3 transition hover:bg-hover hover:text-ink active:bg-hover sm:mb-6 sm:h-9"
       >
         <ChevronLeft aria-hidden className="h-[18px] w-[18px]" />
         Meetings
@@ -28,6 +30,10 @@ export default function MeetingPage(props: PageProps<"/meetings/[id]">) {
     </>
   );
 }
+
+/* Phones: plain sections on the page, divided by a hairline. Larger screens: cards. */
+const SECTION =
+  "max-sm:border-t max-sm:border-line max-sm:pt-7 sm:rounded-[var(--radius-card)] sm:bg-surface sm:p-8 sm:shadow-[var(--shadow-card)]";
 
 type MeetingRow = {
   id: string;
@@ -96,7 +102,7 @@ async function Meeting({ params }: { params: PageProps<"/meetings/[id]">["params
       )}
 
       {/* Notes */}
-      <section aria-labelledby="notes" className="card p-6 sm:p-8">
+      <section aria-labelledby="notes" className={SECTION}>
         <div className="mb-5 flex items-center justify-between gap-3">
           <h2 id="notes" className="text-[20px] font-semibold tracking-tight">
             Notes
@@ -111,7 +117,7 @@ async function Meeting({ params }: { params: PageProps<"/meetings/[id]">["params
             {s.action_items.length > 0 && (
               <div>
                 <h3 className="eyebrow mb-3">Action items</h3>
-                <ul className="flex flex-col divide-y divide-line overflow-hidden rounded-2xl bg-sunken/70">
+                <ul className="flex flex-col divide-y divide-line overflow-hidden rounded-2xl bg-sunken/70 max-sm:bg-surface max-sm:shadow-[0_0_0_1px_rgb(0_0_0/0.04)]">
                   {s.action_items.map((a, i) => (
                     <li key={i} className="flex gap-3.5 px-4 py-3.5">
                       <span aria-hidden className="mt-[3px] h-[18px] w-[18px] flex-none rounded-full border-[1.5px] border-ink-4" />
@@ -119,8 +125,8 @@ async function Meeting({ params }: { params: PageProps<"/meetings/[id]">["params
                         <span className="block text-[16px] font-medium leading-snug">{a.task}</span>
                         {(a.owner || a.due) && (
                           <span className="mt-1 flex flex-wrap gap-1.5">
-                            {a.owner && <span className="chip !h-6 bg-surface">{a.owner}</span>}
-                            {a.due && <span className="chip !h-6 bg-surface">Due {a.due}</span>}
+                            {a.owner && <span className="chip !h-6 bg-surface max-sm:bg-sunken">{a.owner}</span>}
+                            {a.due && <span className="chip !h-6 bg-surface max-sm:bg-sunken">Due {a.due}</span>}
                           </span>
                         )}
                       </span>
@@ -147,7 +153,7 @@ async function Meeting({ params }: { params: PageProps<"/meetings/[id]">["params
       </section>
 
       {/* Transcript */}
-      <section aria-labelledby="transcript" className="card p-6 sm:p-8">
+      <section aria-labelledby="transcript" className={SECTION}>
         <h2 id="transcript" className="mb-5 text-[20px] font-semibold tracking-tight">
           Transcript
         </h2>
@@ -183,13 +189,13 @@ function MeetingSkeleton() {
         <div className="skeleton h-9 w-2/3 sm:w-1/2" />
         <div className="skeleton h-4 w-64" />
       </div>
-      <div className="card space-y-3 p-6 sm:p-8">
+      <div className={`space-y-3 ${SECTION}`}>
         <div className="skeleton mb-5 h-5 w-20" />
         <div className="skeleton h-4 w-full" />
         <div className="skeleton h-4 w-[90%]" />
         <div className="skeleton h-4 w-[70%]" />
       </div>
-      <div className="card space-y-5 p-6 sm:p-8">
+      <div className={`space-y-5 ${SECTION}`}>
         <div className="skeleton h-5 w-28" />
         {[0, 1, 2].map((i) => (
           <div key={i} className="flex gap-3.5">

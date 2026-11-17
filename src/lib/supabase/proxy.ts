@@ -60,6 +60,10 @@ export async function updateSession(request: NextRequest) {
   // The landing page (public/landing) is open to everyone. Signed-out
   // visitors see it at "/"; anyone can open it at /welcome.
   if (path.startsWith("/landing/")) return response;
+  // Opened from the home screen while signed out → straight to sign-in.
+  if (!claims && path === "/" && request.nextUrl.searchParams.get("source") === "pwa") {
+    return redirectKeepingCookies(response, new URL("/login", request.url));
+  }
   if (path === "/welcome" || (!claims && path === "/")) {
     const rewrite = NextResponse.rewrite(new URL("/landing/index.html", request.url));
     for (const cookie of response.cookies.getAll()) rewrite.cookies.set(cookie);
