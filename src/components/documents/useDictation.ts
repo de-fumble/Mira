@@ -4,11 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { getDeepgramToken, MIME_CANDIDATES, openDeepgram } from "@/lib/deepgram-client";
 import { createClient } from "@/lib/supabase/client";
 
-export type DictationPhase = "idle" | "starting" | "listening" | "polishing";
+export type DictationPhase = "idle" | "starting" | "listening" | "paused" | "polishing";
 
-// Live dictation. Spoken "comma", "full stop", "new paragraph"… are turned
-// into punctuation by cleanDictation (Deepgram's own dictation mode drops the
-// capitals on names and mistakes words like "trial period" for commands).
+// Live dictation. Spoken "comma", "full stop", "new paragraph", "caps on"… are
+// handled by lib/dictation (Deepgram's own dictation mode drops the capitals on
+// names and mistakes words like "trial period" for commands).
 const LIVE_URL =
   "wss://api.deepgram.com/v1/listen?" +
   new URLSearchParams({
@@ -23,9 +23,10 @@ const LIVE_URL =
 type Result = { type: string; is_final?: boolean; channel?: { alternatives?: { transcript: string }[] } };
 
 /**
- * Microphone → live text (onText for each finished phrase) → when stopped,
- * the whole recording is transcribed again for accuracy (onPolished).
- * The audio is uploaded only for that second pass and deleted right after.
+ * Microphone → live text (onText with each finished phrase, as heard) → when
+ * stopped, the whole recording is transcribed again for accuracy (onPolished
+ * with the full transcript, as heard). Pausing leaves the paused time out of
+ * both. The audio is uploaded only for that second pass and deleted right after.
  */
 export function useDictation({
   documentId,
@@ -37,10 +38,17 @@ export function useDictation({
   /** Element that gets the live mic level as the CSS variable --level. */
   levelRef: React.RefObject<HTMLElement | null>;
   onText: (text: string) => void;
-  /** null = keep the live text (polishing failed or found nothing). */
-  onPolished: (text: string | null, note?: string) => void;
+  /** The whole recording, as heard; null = keep the live text (polishing failed or found nothing). */
+  /** `seconds`: time spent listening (pauses not counted). */
+  onPolished: (text: string | null, note: string | undefined, seconds: number) => void;
 }) {
-  const [phase, setPhase] = useState<DictationPhase>("idle");
+  const [phase, setPhaseState] = useState<DictationPhase>("idle");
+  // The phase right now (state lags a render; voice commands act mid-render).
+  const phaseRef = useRef<DictationPhase>("idle");
+  const setPhase = (p: DictationPhase) => {
+    phaseRef.current = p;
+    setPhaseState(p);
+  };
   const [interim, setInterim] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(0);
@@ -56,8 +64,12 @@ export function useDictation({
   const rafRef = useRef(0);
   const wakeRef = useRef<WakeLockSentinel | null>(null);
   const heardRef = useRef(false);
-  const startedAtRef = useRef(0);
+  const startedAtRef = useRef(0); // when listening last started or resumed
+  const activeMsRef = useRef(0); // time spent listening before that
   const callbacks = useRef({ onText, onPolished });
+  /** Seconds spent listening so far in this dictation (pauses not counted). */
+  const spokenSeconds = () =>
+    Math.round((activeMsRef.current + (phaseRef.current === "listening" ? Date.now() - startedAtRef.current : 0)) / 1000);
   useEffect(() => {
     callbacks.current = { onText, onPolished };
   });
@@ -82,11 +94,7 @@ export function useDictation({
   // document, and shows the same one when you come back. Leaving mid-dictation
   // stops it cleanly: the words already typed stay, and the editor isn't left
   // stuck in "listening". (A clean-up that's already polishing finishes on its own.)
-  const phaseRef = useRef<DictationPhase>("idle");
   const visibleRef = useRef(true);
-  useEffect(() => {
-    phaseRef.current = phase;
-  }, [phase]);
   useEffect(() => {
     visibleRef.current = true;
     return () => {
@@ -100,10 +108,11 @@ export function useDictation({
       }
       release();
       chunksRef.current = [];
-      if (p === "listening") {
+      if (p === "listening" || p === "paused") {
+        const secs = spokenSeconds();
         setInterim("");
         setPhase("idle");
-        callbacks.current.onPolished(null, "Dictation stopped when you left the document. Everything up to that point is kept.");
+        callbacks.current.onPolished(null, "Dictation stopped when you left the document. Everything up to that point is kept.", secs);
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -119,20 +128,25 @@ export function useDictation({
     const buf = new Uint8Array(analyser.fftSize);
     let smooth = 0;
     const tick = () => {
+      rafRef.current = requestAnimationFrame(tick);
+      if (phaseRef.current === "paused") {
+        smooth = 0;
+        levelRef.current?.style.setProperty("--level", "0");
+        return;
+      }
       analyser.getByteTimeDomainData(buf);
       let sum = 0;
       for (const v of buf) sum += ((v - 128) / 128) ** 2;
       const level = Math.min(1, Math.sqrt(sum / buf.length) * 6);
       smooth = smooth * 0.7 + level * 0.3;
       levelRef.current?.style.setProperty("--level", smooth.toFixed(3));
-      rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
   };
 
   /** Resolves false if dictation couldn't start (the error is in `error`). */
   const start = async (): Promise<boolean> => {
-    if (phase !== "idle") return false;
+    if (phaseRef.current !== "idle") return false;
     setError(null);
     setInterim("");
     setSeconds(0);
@@ -202,8 +216,11 @@ export function useDictation({
     recorderRef.current = recorder;
     recorder.start(250);
     startedAtRef.current = Date.now();
+    activeMsRef.current = 0;
     timersRef.current.push(
-      window.setInterval(() => setSeconds(Math.floor((Date.now() - startedAtRef.current) / 1000)), 500),
+      window.setInterval(() => {
+        if (phaseRef.current === "listening") setSeconds(Math.floor((activeMsRef.current + Date.now() - startedAtRef.current) / 1000));
+      }, 500),
       window.setInterval(() => {
         if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ type: "KeepAlive" }));
       }, 5000),
@@ -218,9 +235,29 @@ export function useDictation({
     return true;
   };
 
+  /** The microphone stays open but nothing is heard or kept until resume(). */
+  const pause = () => {
+    const recorder = recorderRef.current;
+    if (phaseRef.current !== "listening" || !recorder || recorder.state !== "recording") return;
+    recorder.pause();
+    activeMsRef.current += Date.now() - startedAtRef.current;
+    setInterim("");
+    setPhase("paused");
+  };
+
+  const resume = () => {
+    const recorder = recorderRef.current;
+    if (phaseRef.current !== "paused" || !recorder || recorder.state !== "paused") return;
+    recorder.resume();
+    startedAtRef.current = Date.now();
+    setPhase("listening");
+  };
+
   const stop = async () => {
     const recorder = recorderRef.current;
-    if (phase !== "listening" || !recorder) return;
+    const p = phaseRef.current;
+    if ((p !== "listening" && p !== "paused") || !recorder) return;
+    const secs = spokenSeconds();
     setPhase("polishing");
 
     await new Promise<void>((resolve) => {
@@ -243,7 +280,7 @@ export function useDictation({
     setInterim("");
 
     if (!heardRef.current) {
-      callbacks.current.onPolished(null, "Mira didn’t hear any words. Check your microphone and try again.");
+      callbacks.current.onPolished(null, "Mira didn’t hear any words. Check your microphone and try again.", secs);
       setPhase("idle");
       return;
     }
@@ -263,15 +300,15 @@ export function useDictation({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path }),
       });
-      const body = (await res.json().catch(() => ({}))) as { text?: string };
-      callbacks.current.onPolished(res.ok && body.text?.trim() ? body.text : null);
+      const body = (await res.json().catch(() => ({}))) as { raw?: string };
+      callbacks.current.onPolished(res.ok && body.raw?.trim() ? body.raw : null, undefined, secs);
     } catch {
-      callbacks.current.onPolished(null, "Kept the live transcript — the accuracy pass couldn’t run this time.");
+      callbacks.current.onPolished(null, "Kept the live transcript — the accuracy pass couldn’t run this time.", secs);
     } finally {
       chunksRef.current = [];
       setPhase("idle");
     }
   };
 
-  return { phase, interim, error, seconds, start, stop };
+  return { phase, interim, error, seconds, start, stop, pause, resume };
 }

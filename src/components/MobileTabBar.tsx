@@ -7,8 +7,8 @@ import { useState } from "react";
 import { NAV_FORWARD, NAV_TAB } from "./PageTransition";
 
 const TABS = [
-  { href: "/", label: "Meetings", Icon: AudioLines, match: (p: string) => p === "/" },
-  { href: "/documents", label: "Documents", Icon: FileText, match: (p: string) => p === "/documents" },
+  { href: "/", label: "Meetings", tour: "meetings", Icon: AudioLines, match: (p: string) => p === "/" },
+  { href: "/documents", label: "Documents", tour: "documents", Icon: FileText, match: (p: string) => p === "/documents" },
 ] as const;
 
 /** Screens that have their own bottom controls (or are full-screen) hide the tab bar. */
@@ -40,6 +40,7 @@ export function MobileTabBar({ recording }: { recording: boolean }) {
         href={t.href}
         transitionTypes={NAV_TAB}
         aria-current={on ? "page" : undefined}
+        data-tour={t.tour}
         onClick={() => {
           if (!on) tick();
           setTapped({ href: t.href, from: path });
@@ -68,6 +69,7 @@ export function MobileTabBar({ recording }: { recording: boolean }) {
               href="/record"
               transitionTypes={NAV_FORWARD}
               aria-label="New recording"
+              data-tour="record"
               onClick={tick}
               className="grid h-[46px] w-[46px] place-items-center rounded-full bg-ink shadow-[0_6px_16px_-6px_rgb(0_0_0/0.5)] transition-transform duration-200 ease-[var(--ease-out)] active:scale-90"
             >

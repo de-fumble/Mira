@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { AppNav, AppNavFallback, HeaderBrand, HeaderRecordButton, RecordLink, UserMenu } from "@/components/AppHeader";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { ScreenTransition } from "@/components/PageTransition";
+import { TourHost } from "@/components/tour/Tour";
 import { getViewer } from "@/lib/admin";
 import { getFeatures } from "@/lib/features";
 
@@ -38,6 +39,9 @@ export default function AppLayout({ children }: LayoutProps<"/">) {
       <Suspense>
         <TabBar />
       </Suspense>
+      <Suspense>
+        <Tours />
+      </Suspense>
     </>
   );
 }
@@ -51,6 +55,12 @@ async function HeaderRecord() {
 async function TabBar() {
   const { recording } = await getFeatures();
   return <MobileTabBar recording={recording} />;
+}
+
+/** First-run tours (each starts once, the first time someone reaches its screen). */
+async function Tours() {
+  const [viewer, features] = await Promise.all([getViewer(), getFeatures()]);
+  return <TourHost seen={viewer.tours} recording={features.recording} aiNotes={features.ai_notes} />;
 }
 
 async function Account() {

@@ -41,6 +41,7 @@ export function SearchField() {
   return (
     <form
       role="search"
+      data-tour="search"
       className="relative w-full sm:w-80"
       onSubmit={(e) => {
         e.preventDefault();

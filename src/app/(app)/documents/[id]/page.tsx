@@ -35,11 +35,20 @@ async function Document({ params }: { params: PageProps<"/documents/[id]">["para
   const [supabase, features] = await Promise.all([createClient(), getFeatures()]);
   const { data: doc } = await supabase
     .from("documents")
-    .select("id, title, content, analysis")
+    // "*": the dictation totals (migration 0006) are read when the columns exist.
+    .select("*")
     .eq("id", id)
-    .maybeSingle<Pick<DocumentRow, "id" | "title" | "content" | "analysis">>();
+    .maybeSingle<DocumentRow & { dictated_words?: number; dictation_seconds?: number }>();
   if (!doc) notFound();
-  return <DocumentEditor key={doc.id} doc={doc} dictationEnabled={features.recording} />;
+  const dictated = { words: doc.dictated_words ?? 0, seconds: doc.dictation_seconds ?? 0 };
+  return (
+    <DocumentEditor
+      key={doc.id}
+      doc={{ id: doc.id, title: doc.title, content: doc.content, analysis: doc.analysis }}
+      dictated={dictated}
+      dictationEnabled={features.recording}
+    />
+  );
 }
 
 function EditorSkeleton() {

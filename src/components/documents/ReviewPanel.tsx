@@ -120,7 +120,7 @@ export function ReviewPanel({
   const minutes = Math.max(1, Math.round(words / 1500));
 
   return (
-    <aside aria-label="AI review" className="card flex flex-col gap-4 p-5 lg:sticky lg:top-24 lg:max-h-[calc(100dvh-8rem)] lg:overflow-y-auto">
+    <aside aria-label="AI review" data-tour="doc-review" className="card flex flex-col gap-4 p-5 lg:sticky lg:top-24 lg:max-h-[calc(100dvh-8rem)] lg:overflow-y-auto">
       <div className="flex items-center justify-between gap-3">
         <h2 className="inline-flex items-center gap-2 text-[15px] font-semibold text-ink-2">
           <Sparkles aria-hidden className="h-4 w-4" />

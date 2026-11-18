@@ -6,12 +6,14 @@ import {
   Document,
   Footer,
   HeadingLevel,
+  LevelFormat,
   Packer,
   PageNumber,
   Paragraph,
   TextRun,
 } from "docx";
 import PDFDocument from "pdfkit";
+import { parseDoc, type Run } from "./rich-text";
 import { formatClock, formatDuration, speakerLabel, type MeetingSummary, type Segment } from "./transcript";
 
 /** Everything an exported file contains. */
@@ -221,28 +223,80 @@ export function buildPdf(m: ExportMeeting): Promise<Buffer> {
 
 type ExportDocument = { title: string; content: string };
 
-/** Paragraphs (blank-line separated), each a list of lines. */
-function paragraphsOf(content: string): string[][] {
-  return content
-    .replace(/\r\n?/g, "\n")
-    .split(/\n\s*\n/)
-    .map((p) => p.split("\n").map((l) => l.trimEnd()))
-    .filter((lines) => lines.some((l) => l.trim()));
+/** Word runs for one paragraph: bold / italic / underline, line breaks inside. */
+function docxRuns(runs: Run[], size: number, bold = false): TextRun[] {
+  const out: TextRun[] = [];
+  let lineBreak = false;
+  for (const r of runs) {
+    r.text.split("\n").forEach((text, i) => {
+      if (i) lineBreak = true;
+      if (!text) return;
+      out.push(
+        new TextRun({
+          text,
+          size,
+          bold: bold || r.marks.includes("b") || undefined,
+          italics: r.marks.includes("i") || undefined,
+          underline: r.marks.includes("u") ? {} : undefined,
+          break: lineBreak ? 1 : undefined,
+        }),
+      );
+      lineBreak = false;
+    });
+  }
+  if (lineBreak) out.push(new TextRun({ text: "", size, break: 1 }));
+  return out;
 }
 
-/** A dictated document as a clean Word file: title, paragraphs, page numbers. */
+/** A document as a clean Word file: title, its headings, lists and bold text, page numbers. */
 export async function buildDocumentDocx(d: ExportDocument): Promise<Buffer> {
-  const body = paragraphsOf(d.content).map(
-    (lines) =>
-      new Paragraph({
-        spacing: { after: 200, line: 312 },
-        children: lines.map((line, i) => new TextRun({ text: line, size: 24, break: i > 0 ? 1 : undefined })),
-      }),
-  );
+  const blocks = parseDoc(d.content);
+  const body: Paragraph[] = [];
+  let numbered = 0; // each numbered list starts again at 1
+  blocks.forEach((b, i) => {
+    const prev = blocks[i - 1]?.type;
+    const next = blocks[i + 1]?.type;
+    if (b.type === "h1" || b.type === "h2") {
+      const h1 = b.type === "h1";
+      body.push(
+        new Paragraph({
+          heading: h1 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2,
+          keepNext: true,
+          spacing: { before: i ? (h1 ? 360 : 280) : 0, after: 120 },
+          children: docxRuns(b.runs, h1 ? 32 : 27, true),
+        }),
+      );
+    } else if (b.type === "ul" || b.type === "ol") {
+      if (b.type === "ol" && prev !== "ol") numbered++;
+      body.push(
+        new Paragraph({
+          ...(b.type === "ul" ? { bullet: { level: 0 } } : { numbering: { reference: "mira-numbers", level: 0, instance: numbered } }),
+          spacing: { after: next === b.type ? 80 : 200, line: 312 },
+          children: docxRuns(b.runs, 24),
+        }),
+      );
+    } else {
+      body.push(new Paragraph({ spacing: { after: 200, line: 312 }, children: docxRuns(b.runs, 24) }));
+    }
+  });
   const doc = new Document({
     creator: "Mira",
     title: d.title,
-    styles: { default: { document: { run: { font: "Calibri", size: 24, color: INK } } } },
+    styles: {
+      default: { document: { run: { font: "Calibri", size: 24, color: INK } } },
+      paragraphStyles: [
+        { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", run: { font: "Calibri", color: INK, bold: true } },
+        { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", run: { font: "Calibri", color: INK, bold: true } },
+      ],
+    },
+    numbering: {
+      config: [
+        {
+          reference: "mira-numbers",
+          levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.START, style: { paragraph: { indent: { left: 720, hanging: 360 } } } }],
+        },
+      ],
+    },
     sections: [
       {
         properties: { page: { margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } } },
@@ -290,14 +344,52 @@ export function buildDocumentPdf(d: ExportDocument): Promise<Buffer> {
     doc.registerFont("body", REGULAR);
     doc.registerFont("bold", BOLD);
     const width = doc.page.width - margin * 2;
+    const ink = `#${INK}`;
 
-    doc.font("bold").fontSize(20).fillColor(`#${INK}`).text(d.title, { width, lineGap: 2 });
+    doc.font("bold").fontSize(20).fillColor(ink).text(d.title, { width, lineGap: 2 });
     doc.moveDown(1);
-    doc.font("body").fontSize(12).fillColor(`#${INK}`);
-    for (const lines of paragraphsOf(d.content)) {
-      doc.text(lines.join("\n"), margin, doc.y, { width, lineGap: 4, paragraphGap: 0 });
-      doc.moveDown(0.8);
-    }
+
+    /** One block's runs at (x, y), each in its own style, flowing as one paragraph. */
+    const write = (runs: Run[], x: number, w: number, size: number, bold = false) => {
+      const parts = runs.filter((r) => r.text);
+      if (!parts.length) {
+        doc.font("body").fontSize(size).text(" ", x, doc.y, { width: w });
+        return;
+      }
+      parts.forEach((r, i) => {
+        const last = i === parts.length - 1;
+        doc
+          .font(bold || r.marks.includes("b") ? "bold" : "body")
+          .fontSize(size)
+          .fillColor(ink);
+        const opts = { continued: !last, underline: r.marks.includes("u"), oblique: r.marks.includes("i") ? 12 : false, lineGap: 4 };
+        if (i === 0) doc.text(r.text, x, doc.y, { ...opts, width: w });
+        else doc.text(r.text, opts);
+      });
+    };
+
+    const blocks = parseDoc(d.content);
+    let n = 0;
+    blocks.forEach((b, i) => {
+      const next = blocks[i + 1]?.type;
+      if (b.type === "h1" || b.type === "h2") {
+        const h1 = b.type === "h1";
+        if (doc.y > doc.page.height - margin - 90) doc.addPage(); // keep a heading with what follows
+        if (i) doc.moveDown(h1 ? 0.5 : 0.3);
+        write(b.runs, margin, width, h1 ? 16 : 13.5, true);
+        doc.moveDown(0.45);
+      } else if (b.type === "ul" || b.type === "ol") {
+        n = b.type === "ol" && blocks[i - 1]?.type === "ol" ? n + 1 : 1;
+        const y = doc.y;
+        doc.font("body").fontSize(12).fillColor(`#${MUTED}`).text(b.type === "ul" ? "•" : `${n}.`, margin + 2, y, { width: 20 });
+        doc.y = y;
+        write(b.runs, margin + 22, width - 22, 12);
+        doc.moveDown(next === b.type ? 0.3 : 0.8);
+      } else {
+        write(b.runs, margin, width, 12);
+        doc.moveDown(0.8);
+      }
+    });
 
     const range = doc.bufferedPageRange();
     for (let i = range.start; i < range.start + range.count; i++) {

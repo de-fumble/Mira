@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { cleanDictation } from "@/lib/documents";
+import { cleanDictation } from "@/lib/dictation";
 import { createClient } from "@/lib/supabase/server";
 
 export const maxDuration = 120;
@@ -13,7 +13,7 @@ const LISTEN_URL =
 /**
  * POST /api/documents/:id/polish  { path }
  * Re-transcribes a dictation the browser just uploaded to the user's
- * storage folder, then deletes the audio. Returns the polished text.
+ * storage folder, then deletes the audio. Returns the transcript.
  */
 export async function POST(request: Request, ctx: RouteContext<"/api/documents/[id]/polish">) {
   const { id } = await ctx.params;
@@ -52,7 +52,9 @@ export async function POST(request: Request, ctx: RouteContext<"/api/documents/[
     }
     const data = (await res.json()) as { results?: { channels?: { alternatives?: { transcript?: string }[] }[] } };
     const raw = data.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? "";
-    return NextResponse.json({ text: cleanDictation(raw) });
+    // `raw` keeps the spoken commands ("scratch that", "caps on"…), which the
+    // editor applies the same way it did during live dictation.
+    return NextResponse.json({ text: cleanDictation(raw), raw });
   } finally {
     await remove(); // dictation audio is never kept
   }

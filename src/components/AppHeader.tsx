@@ -1,18 +1,19 @@
 "use client";
 
-import { CreditCard, Gauge, LogOut, Settings } from "lucide-react";
+import { Compass, CreditCard, Gauge, LogOut, Settings } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { signOut } from "@/app/actions";
 import { Logo } from "./Logo";
 import { NAV_TAB } from "./PageTransition";
+import { requestTour } from "./tour/Tour";
 import { Spinner } from "./ui";
 
 /** Header record button — desktop/tablet only; phones use the tab bar (MobileTabBar). */
 export function RecordLink() {
   return (
-    <Link href="/record" className="btn btn-md btn-primary max-sm:hidden">
+    <Link href="/record" data-tour="record" className="btn btn-md btn-primary max-sm:hidden">
       <span aria-hidden className="h-2 w-2 rounded-full bg-rec" />
       New recording
     </Link>
@@ -35,8 +36,8 @@ export function HeaderBrand() {
 }
 
 const NAV = [
-  { href: "/", label: "Meetings", match: (p: string) => p === "/" || p.startsWith("/meetings") || p === "/record" },
-  { href: "/documents", label: "Documents", match: (p: string) => p.startsWith("/documents") },
+  { href: "/", label: "Meetings", tour: "meetings", match: (p: string) => p === "/" || p.startsWith("/meetings") || p === "/record" },
+  { href: "/documents", label: "Documents", tour: "documents", match: (p: string) => p.startsWith("/documents") },
 ] as const;
 
 function NavLinks({ path }: { path: string | null }) {
@@ -50,6 +51,7 @@ function NavLinks({ path }: { path: string | null }) {
             href={item.href}
             transitionTypes={NAV_TAB}
             aria-current={on ? "page" : undefined}
+            data-tour={item.tour}
             className={`tap rounded-full px-3 py-1.5 text-[14px] font-medium transition sm:px-3.5 ${
               on ? "bg-surface text-ink shadow-[0_1px_3px_rgb(0_0_0/0.12)]" : "text-ink-3 hover:text-ink"
             }`}
@@ -102,6 +104,7 @@ export function UserMenu({ email, name, isAdmin = false }: { email: string; name
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Account"
+        data-tour="account"
         className="tap grid h-11 w-11 place-items-center rounded-full bg-sunken text-[15px] font-semibold uppercase text-ink-2 transition hover:bg-hover active:scale-95 sm:h-10 sm:w-10"
       >
         {(name || email).charAt(0) || "?"}
@@ -139,6 +142,18 @@ export function UserMenu({ email, name, isAdmin = false }: { email: string; name
               Admin dashboard
             </Link>
           )}
+          <button
+            role="menuitem"
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              requestTour();
+            }}
+            className={menuItem}
+          >
+            <Compass aria-hidden className="h-4 w-4" />
+            Take the tour
+          </button>
           <button
             role="menuitem"
             type="button"

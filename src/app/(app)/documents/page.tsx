@@ -6,7 +6,8 @@ import { createDocument } from "@/app/document-actions";
 import { NewDocumentButton } from "@/components/documents/NewDocumentButton";
 import { NAV_FORWARD } from "@/components/PageTransition";
 import { Notice } from "@/components/ui";
-import { scoreLabel, type DocAnalysis } from "@/lib/documents";
+import { currentScore, scoreLabel, type DocAnalysis } from "@/lib/documents";
+import { toPlain } from "@/lib/rich-text";
 import { createClient } from "@/lib/supabase/server";
 import { formatShortDate, getClock } from "@/lib/time";
 
@@ -37,6 +38,9 @@ export default function DocumentsPage(props: PageProps<"/documents">) {
     </>
   );
 }
+
+/** First words of a document for the list (no formatting markers, on one line). */
+const preview = (stored: string) => toPlain(stored.slice(0, 600)).replace(/\s+/g, " ").trim().slice(0, 180);
 
 type Row = { id: string; title: string; content: string; word_count: number; analysis: DocAnalysis | null; updated_at: string };
 
@@ -83,12 +87,12 @@ async function DocumentList({ searchParams }: { searchParams: PageProps<"/docume
                     {d.title}
                   </span>
                   <span className="mt-0.5 block truncate text-[14px] text-ink-3 sm:text-[15px]">
-                    {d.content.trim() ? d.content.trim().slice(0, 180) : "Empty — open it and start dictating."}
+                    {preview(d.content) || "Empty — open it and start dictating."}
                   </span>
                   <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] tabular-nums text-ink-4">
                     <span>{d.word_count.toLocaleString("en")} words</span>
                     <span>Edited {formatShortDate(d.updated_at, clock)}</span>
-                    {d.analysis && <ScoreChip score={d.analysis.score} />}
+                    {d.analysis && <ScoreChip score={currentScore(d.analysis, toPlain(d.content))} />}
                   </span>
                 </span>
                 <ChevronRight aria-hidden className="h-5 w-5 flex-none text-ink-4 transition group-hover:translate-x-0.5 group-hover:text-ink-2 max-sm:hidden" />
@@ -109,7 +113,7 @@ function ScoreChip({ score }: { score: number }) {
 
 function EmptyState() {
   const steps = [
-    { Icon: Mic, title: "Speak", text: "Press Dictate and read or talk. Say “comma”, “full stop” or “new paragraph” as you go." },
+    { Icon: Mic, title: "Speak", text: "Press Dictate and read or talk. Say “comma”, “new paragraph” or “pause dictation” as you go — the commands are listed while you talk." },
     { Icon: Sparkles, title: "Review", text: "AI review flags misspelt words, sentences that don’t make sense and ones that don’t belong." },
     { Icon: Download, title: "Export", text: "Download a clean Word document or PDF, ready to send." },
   ];

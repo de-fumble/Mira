@@ -3,8 +3,9 @@ import { notFound } from "next/navigation";
 import { cache } from "react";
 import { isAdminUser } from "./admin-emails";
 import { createClient } from "./supabase/server";
+import { toursSeen } from "./tour";
 
-/** The signed-in user's id + email, and whether they're an admin (once per request). */
+/** The signed-in user's id + email, the tours they've seen, and whether they're an admin (once per request). */
 export const getViewer = cache(async () => {
   const supabase = await createClient();
   const { data } = await supabase.auth.getClaims();
@@ -13,7 +14,7 @@ export const getViewer = cache(async () => {
   const id = claims?.sub ?? null;
   const meta = (claims?.user_metadata ?? {}) as Record<string, unknown>;
   const username = typeof meta.username === "string" && meta.username.trim() ? meta.username.trim() : null;
-  return { id, email, username, isAdmin: isAdminUser(id, email) };
+  return { id, email, username, tours: toursSeen(meta), isAdmin: isAdminUser(id, email) };
 });
 
 /** For admin pages: anyone who isn't an admin gets a plain "not found". */

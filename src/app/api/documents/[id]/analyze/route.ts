@@ -4,6 +4,7 @@ import type { ReviewEvent } from "@/lib/review/events";
 import { ReviewBusyError, ReviewUnavailableError } from "@/lib/review/gemini";
 import { PIPELINE_VERSION, runReview } from "@/lib/review/pipeline";
 import { logReview } from "@/lib/review-log";
+import { toPlain } from "@/lib/rich-text";
 import { createClient } from "@/lib/supabase/server";
 
 // Long documents take a while to review.
@@ -28,7 +29,9 @@ export async function POST(_req: Request, ctx: RouteContext<"/api/documents/[id]
   const { data: doc } = await supabase.from("documents").select("title, content").eq("id", id).maybeSingle<{ title: string; content: string }>();
   if (!doc) return NextResponse.json({ error: "Document not found." }, { status: 404 });
 
-  const words = countWords(doc.content);
+  // The review reads the words only (headings, bullets and bold are formatting).
+  const content = toPlain(doc.content);
+  const words = countWords(content);
   if (words < 3) return NextResponse.json({ error: "Write or dictate a few sentences first." }, { status: 400 });
   if (words > REVIEW_MAX_WORDS) {
     return NextResponse.json(
@@ -53,7 +56,7 @@ export async function POST(_req: Request, ctx: RouteContext<"/api/documents/[id]
       const started = Date.now();
       let reviewed = false;
       try {
-        const result = await runReview({ title: doc.title, content: doc.content, onProgress: send });
+        const result = await runReview({ title: doc.title, content, onProgress: send });
         reviewed = true;
         const stamp = Date.now().toString(36);
         const issues = result.issues.map((issue, i) => ({ ...issue, id: `${stamp}-${i}` }));
@@ -63,7 +66,7 @@ export async function POST(_req: Request, ctx: RouteContext<"/api/documents/[id]
           issues,
           dismissed: [],
           word_count: words,
-          content_hash: hashText(doc.content),
+          content_hash: hashText(content),
           analyzed_at: new Date().toISOString(),
           brief: result.brief,
           pipeline: { version: PIPELINE_VERSION, parts: result.parts, stages: result.stages },

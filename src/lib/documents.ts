@@ -99,112 +99,6 @@ export function cleanDocTitle(raw: string): { title: string; error?: string } {
 }
 
 /* ------------------------------------------------------------------ */
-/* Dictation clean-up                                                  */
-/* ------------------------------------------------------------------ */
-
-const PROPER = [
-  "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-  "january", "february", "april", "june", "july", "september", "october", "november", "december",
-];
-const PROPER_RE = new RegExp(`\\b(${PROPER.join("|")})\\b`, "gi");
-const cap = (w: string) => w.charAt(0).toUpperCase() + w.slice(1);
-
-// Spoken commands → what they type. Longest first so "question mark" wins over shorter matches.
-const COMMANDS: [string, string][] = [
-  ["new paragraph", "\n\n"],
-  ["next paragraph", "\n\n"],
-  ["new line", "\n"],
-  ["next line", "\n"],
-  ["question mark", "?"],
-  ["exclamation mark", "!"],
-  ["exclamation point", "!"],
-  ["full stop", "."],
-  ["period", "."],
-  ["comma", ","],
-  ["semicolon", ";"],
-  ["semi colon", ";"],
-  ["colon", ":"],
-  ["open quote", "“"],
-  ["open quotes", "“"],
-  ["close quote", "”"],
-  ["close quotes", "”"],
-  ["end quote", "”"],
-  ["unquote", "”"],
-  ["open bracket", "("],
-  ["close bracket", ")"],
-];
-const CMD_WORDS = COMMANDS.map(([w]) => w.replace(" ", "\\s+")).sort((a, b) => b.length - a.length).join("|");
-const P = "[,.;:!?]";
-// A spoken command is said at a pause, so the speech service puts punctuation
-// next to it ("Lagos, period." / "budget, question mark."). Words with no
-// punctuation around them ("the trial period ends", "colon surgery") are left alone.
-const CMD_RE = new RegExp(
-  `[ \\t]*${P}*[ \\t]*(?:(?<=^|${P}[ \\t]*)\\b(${CMD_WORDS})\\b|\\b(${CMD_WORDS})\\b(?=[ \\t]*(?:${P}|$)))[ \\t]*${P}*`,
-  "gi",
-);
-const lookup = (w: string) => COMMANDS.find(([c]) => c === w.toLowerCase().replace(/\s+/g, " "))?.[1] ?? "";
-
-/**
- * Turns what the speech service returns into document text: spoken
- * punctuation and paragraphs, spacing, naira amounts, dates and capitals.
- */
-export function cleanDictation(raw: string): string {
-  let t = raw
-    .replace(CMD_RE, (_m, a?: string, b?: string) => `\u0001${lookup(a ?? b ?? "")}\u0001`)
-    .replace(/\u0001([^\u0001]*)\u0001/g, "$1")
-    // Spacing around punctuation.
-    .replace(/[ \t]+([.,;:!?”)])/g, "$1")
-    .replace(/([.!?;:,])\s*([.!?])/g, (_m, a: string, b: string) => (a === "." || a === "," || a === ";" || a === ":" ? b : a))
-    .replace(/([,;:])\s*,/g, "$1")
-    .replace(/([,;:”)])(?=[\p{L}“(])/gu, "$1 ") // not before digits: "2,500", "10:30"
-    .replace(/(?<=\p{Ll}{2}|\d|[”)])([.!?])(?=[\p{Lu}“(])/gu, "$1 ")
-    .replace(/([\p{L}\p{N},.;:!?])([“(])/gu, "$1 $2")
-    .replace(/([“(])\s+/g, "$1")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    // Titles said in full before a name: "missus Adebayo" → "Mrs Adebayo".
-    .replace(/\b[Mm]issus (?=\p{Lu})/gu, "Mrs ")
-    .replace(/\b[Mm]ister (?=\p{Lu})/gu, "Mr ")
-    // "N2.4 million" → "₦2.4 million" (not "N95").
-    .replace(/\bN(?=\d[\d,.]*(?:\s?(?:million|billion|thousand|bn|m|k)\b|,\d{3}))/g, "₦")
-    // "the March 3" (said "the third of March") → "3 March".
-    .replace(/\bthe (January|February|March|April|May|June|July|August|September|October|November|December) (\d{1,2})\b/g, "$2 $1")
-    .replace(PROPER_RE, (w) => cap(w.toLowerCase()))
-    .replace(/\bi\b(?!\.)/g, "I"); // lone "i" (and i'm, i've…), but not "i.e."
-  // Capital letter at the start of each sentence and paragraph (the very
-  // start is left to joinDictated, which knows what comes before).
-  t = t.replace(/((?<!\b(?:i\.e|e\.g|vs))[.!?]["”’)]?\s+|\n\s*)(“?)(\p{Ll})/gu, (_m, pre: string, q: string, ch: string) => pre + q + ch.toUpperCase());
-  return t;
-}
-
-const LOWERCASE_STARTS = new Set(
-  "a an and as at but by for from had has have he her his if in into is it its of on or our she so than that the their then there they this to was we were what when which who will with would you your".split(" "),
-);
-
-/**
- * Joins newly dictated text onto what comes before it: adds a space, and
- * starts a sentence with a capital only where a sentence actually starts.
- */
-export function joinDictated(before: string, insert: string): string {
-  let text = insert.replace(/^[ \t]+/, "");
-  if (!text) return "";
-  const trimmed = before.replace(/[ \t]+$/, "");
-  const atStart = trimmed === "" || /[\n]$/.test(trimmed) || /[.!?]["”’)]?$/.test(trimmed);
-  if (/^\n/.test(text)) return text; // starts a new line/paragraph
-  if (atStart) {
-    text = text.replace(/^(“?)(\p{Ll})/u, (_m, q: string, ch: string) => q + ch.toUpperCase());
-  } else {
-    // The speech service capitalises the start of each chunk; undo that mid-sentence.
-    const first = text.match(/^(\p{Lu}\p{Ll}*)\b/u)?.[1];
-    if (first && LOWERCASE_STARTS.has(first.toLowerCase())) text = first.toLowerCase() + text.slice(first.length);
-  }
-  const needsSpace = before !== "" && !/[\s“(]$/.test(before) && !/^[.,;:!?”)]/.test(text);
-  return (needsSpace ? " " : "") + text;
-}
-
-/* ------------------------------------------------------------------ */
 /* Finding flagged text in the document                                */
 /* ------------------------------------------------------------------ */
 
@@ -257,4 +151,33 @@ export function locateIssues(text: string, issues: DocIssue[]): LocatedIssue[] {
     out.push({ ...issue, ...hit });
   }
   return out.sort((a, b) => a.start - b.start);
+}
+
+/**
+ * The score as it stands now: the last review's flags that are still in the
+ * text (not fixed, not marked "keep as is"), scored against the current words.
+ * The editor's score card and the documents list both show this.
+ */
+export function currentScore(analysis: DocAnalysis, plain: string): number {
+  const open = analysis.issues.filter((i) => !(analysis.dismissed ?? []).includes(i.id));
+  return scoreFor(locateIssues(plain, open), countWords(plain));
+}
+
+/* ------------------------------------------------------------------ */
+/* Dictating vs typing                                                 */
+/* ------------------------------------------------------------------ */
+
+/** An average typing speed (words a minute) — what dictation time is compared with. */
+export const TYPING_WPM = 40;
+
+/** How long typing `words` would take, in seconds. */
+export const typingSeconds = (words: number) => Math.round((words / TYPING_WPM) * 60);
+
+/** "45 sec", "2 min 10 sec", "14 min", "1 h 5 min". */
+export function formatSpan(totalSeconds: number): string {
+  const s = Math.max(0, Math.round(totalSeconds));
+  if (s < 60) return `${s} sec`;
+  if (s < 600) return s % 60 ? `${Math.floor(s / 60)} min ${s % 60} sec` : `${s / 60} min`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`;
 }
