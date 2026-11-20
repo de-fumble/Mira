@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { cleanDocTitle, countWords, DOC_MAX_CHARS, type DocAnalysis } from "@/lib/documents";
+import { cleanDocTitle, countWords, DOC_MAX_CHARS, DOC_TITLE_MAX, type DocAnalysis } from "@/lib/documents";
 import { toPlain } from "@/lib/rich-text";
 import { createClient } from "@/lib/supabase/server";
 
@@ -14,6 +14,32 @@ export async function createDocument() {
   const { data, error } = await supabase.from("documents").insert({}).select("id").single();
   if (error || !data) redirect("/documents?error=create");
   redirect(`/documents/${data.id}`);
+}
+
+/**
+ * A document made from an uploaded file (converted in the browser, see
+ * lib/import-doc), then opened in the editor.
+ */
+export async function importDocument(
+  rawTitle: string,
+  content: string,
+  left: { images: number; tables: number } = { images: 0, tables: 0 },
+): Promise<{ error?: string }> {
+  if (typeof content !== "string" || typeof rawTitle !== "string") return { error: "Couldn’t read that file." };
+  if (content.length > DOC_MAX_CHARS) return { error: "This document is too long for Mira (about 50,000 words at most). Split it into smaller files." };
+  const words = countWords(toPlain(content));
+  if (!words) return { error: "There’s no text in this file for Mira to edit." };
+  const { title, error: titleError } = cleanDocTitle(rawTitle.slice(0, DOC_TITLE_MAX));
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("documents")
+    .insert({ title: titleError ? "Imported document" : title, content, word_count: words })
+    .select("id")
+    .single();
+  if (error || !data) return { error: "Couldn’t add the document. Please try again." };
+  revalidatePath("/documents");
+  const n = (v: unknown) => Math.max(0, Math.min(999, Math.floor(Number(v)) || 0));
+  redirect(`/documents/${data.id}?imported=1&images=${n(left?.images)}&tables=${n(left?.tables)}`);
 }
 
 /** Autosave: the editor sends the whole text, with its formatting markers (and/or title). */

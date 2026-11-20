@@ -7,6 +7,7 @@ import { DocumentEditor } from "@/components/documents/DocumentEditor";
 import { NAV_BACK } from "@/components/PageTransition";
 import type { DocumentRow } from "@/lib/documents";
 import { getFeatures } from "@/lib/features";
+import { readReviewJob } from "@/lib/review/jobs";
 import { createClient } from "@/lib/supabase/server";
 
 export const metadata: Metadata = { title: "Document" };
@@ -23,22 +24,28 @@ export default function DocumentPage(props: PageProps<"/documents/[id]">) {
         Documents
       </Link>
       <Suspense fallback={<EditorSkeleton />}>
-        <Document params={props.params} />
+        <Document params={props.params} searchParams={props.searchParams} />
       </Suspense>
     </>
   );
 }
 
-async function Document({ params }: { params: PageProps<"/documents/[id]">["params"] }) {
-  const { id } = await params;
+async function Document({ params, searchParams }: Pick<PageProps<"/documents/[id]">, "params" | "searchParams">) {
+  const [{ id }, query] = await Promise.all([params, searchParams]);
+  // Just uploaded (see importDocument): say what came across.
+  const imported = query.imported ? { images: Number(query.images) || 0, tables: Number(query.tables) || 0 } : null;
   if (!/^[0-9a-f-]{36}$/i.test(id)) notFound();
   const [supabase, features] = await Promise.all([createClient(), getFeatures()]);
-  const { data: doc } = await supabase
-    .from("documents")
-    // "*": the dictation totals (migration 0006) are read when the columns exist.
-    .select("*")
-    .eq("id", id)
-    .maybeSingle<DocumentRow & { dictated_words?: number; dictation_seconds?: number }>();
+  const [{ data: doc }, job] = await Promise.all([
+    supabase
+      .from("documents")
+      // "*": the dictation totals (migration 0006) are read when the columns exist.
+      .select("*")
+      .eq("id", id)
+      .maybeSingle<DocumentRow & { dictated_words?: number; dictation_seconds?: number }>(),
+    // An AI review that hasn't finished yet (migration 0007) carries on when the document opens.
+    readReviewJob(supabase, id),
+  ]);
   if (!doc) notFound();
   const dictated = { words: doc.dictated_words ?? 0, seconds: doc.dictation_seconds ?? 0 };
   return (
@@ -46,6 +53,8 @@ async function Document({ params }: { params: PageProps<"/documents/[id]">["para
       key={doc.id}
       doc={{ id: doc.id, title: doc.title, content: doc.content, analysis: doc.analysis }}
       dictated={dictated}
+      imported={imported}
+      reviewPending={job ? (job.state.place ?? { stage: "read" }) : null}
       dictationEnabled={features.recording}
     />
   );

@@ -4,9 +4,12 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { createDocument } from "@/app/document-actions";
 import { NewDocumentButton } from "@/components/documents/NewDocumentButton";
+import { ReviewChip } from "@/components/documents/ReviewChip";
+import { UploadDocumentButton } from "@/components/documents/UploadDocumentButton";
 import { NAV_FORWARD } from "@/components/PageTransition";
 import { Notice } from "@/components/ui";
-import { currentScore, scoreLabel, type DocAnalysis } from "@/lib/documents";
+import { currentScore, type DocAnalysis } from "@/lib/documents";
+import { pendingReviewIds } from "@/lib/review/jobs";
 import { toPlain } from "@/lib/rich-text";
 import { createClient } from "@/lib/supabase/server";
 import { formatShortDate, getClock } from "@/lib/time";
@@ -27,9 +30,12 @@ export default function DocumentsPage(props: PageProps<"/documents">) {
               Talk instead of typing. Mira writes it down, checks it, and gives you a Word or PDF file.
             </p>
           </div>
-          <form action={createDocument} className="flex-none">
-            <NewDocumentButton shortLabel="New" />
-          </form>
+          <div className="flex flex-none items-center gap-2">
+            <UploadDocumentButton compact />
+            <form action={createDocument}>
+              <NewDocumentButton shortLabel="New" />
+            </form>
+          </div>
         </header>
         <Suspense fallback={<ListSkeleton />}>
           <DocumentList searchParams={props.searchParams} />
@@ -46,12 +52,16 @@ type Row = { id: string; title: string; content: string; word_count: number; ana
 
 async function DocumentList({ searchParams }: { searchParams: PageProps<"/documents">["searchParams"] }) {
   const [{ error: errorParam }, supabase, clock] = await Promise.all([searchParams, createClient(), getClock()]);
-  const { data, error } = await supabase
-    .from("documents")
-    .select("id, title, content, word_count, analysis, updated_at")
-    .order("updated_at", { ascending: false })
-    .limit(200)
-    .returns<Row[]>();
+  const [{ data, error }, pending] = await Promise.all([
+    supabase
+      .from("documents")
+      .select("id, title, content, word_count, analysis, updated_at")
+      .order("updated_at", { ascending: false })
+      .limit(200)
+      .returns<Row[]>(),
+    // AI reviews still going (migration 0007): shown as "Reviewing…" and carried on from here.
+    pendingReviewIds(supabase).then((ids) => new Set(ids)),
+  ]);
 
   if (error) {
     const missing = error.code === "42P01" || error.code === "PGRST205" || /could not find the table/i.test(error.message);
@@ -92,7 +102,12 @@ async function DocumentList({ searchParams }: { searchParams: PageProps<"/docume
                   <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] tabular-nums text-ink-4">
                     <span>{d.word_count.toLocaleString("en")} words</span>
                     <span>Edited {formatShortDate(d.updated_at, clock)}</span>
-                    {d.analysis && <ScoreChip score={currentScore(d.analysis, toPlain(d.content))} />}
+                    <ReviewChip
+                      id={d.id}
+                      score={d.analysis ? currentScore(d.analysis, toPlain(d.content)) : null}
+                      pending={pending.has(d.id)}
+                      known={d.analysis?.analyzed_at ?? null}
+                    />
                   </span>
                 </span>
                 <ChevronRight aria-hidden className="h-5 w-5 flex-none text-ink-4 transition group-hover:translate-x-0.5 group-hover:text-ink-2 max-sm:hidden" />
@@ -103,12 +118,6 @@ async function DocumentList({ searchParams }: { searchParams: PageProps<"/docume
       )}
     </>
   );
-}
-
-function ScoreChip({ score }: { score: number }) {
-  const { tone } = scoreLabel(score);
-  const color = { good: "bg-success-soft text-success", ok: "bg-accent-soft text-accent", warn: "bg-warn-soft text-warn", bad: "bg-danger-soft text-danger" }[tone];
-  return <span className={`rounded-full px-2 py-0.5 text-[12px] font-semibold ${color}`}>Score {score}</span>;
 }
 
 function EmptyState() {
@@ -128,9 +137,13 @@ function EmptyState() {
           <p className="mt-2 text-[16px] leading-relaxed text-ink-3">
             Speaking is about three times faster than typing. A 3,000-word document takes around 20 minutes to read out.
           </p>
-          <form action={createDocument} className="mt-6">
-            <NewDocumentButton label="Start dictating" />
-          </form>
+          <div className="mt-6 flex flex-wrap items-center gap-2">
+            <form action={createDocument}>
+              <NewDocumentButton label="Start dictating" />
+            </form>
+            <UploadDocumentButton label="Upload a document" align="left" />
+          </div>
+          <p className="mt-3 text-[14px] text-ink-3">Already have one? Upload a Word document and dictate new parts into it.</p>
         </div>
         <ol className="flex flex-col gap-3">
           {steps.map(({ Icon, title, text }, i) => (

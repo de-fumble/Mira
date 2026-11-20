@@ -1,47 +1,11 @@
 "use client";
 
 import { ArrowRight, Check, CircleCheck, RefreshCw, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ISSUE_TYPES, scoreLabel, type DocAnalysis, type DocBrief, type IssueType, type LocatedIssue } from "@/lib/documents";
-import { REVIEW_STEPS, type ReviewEvent, type ReviewStage } from "@/lib/review/events";
+import { REVIEW_STEPS, type ReviewPlace } from "@/lib/review/events";
 import { Notice, Spinner } from "../ui";
-
-type Progress = { stage: ReviewStage; detail?: string; done?: number; total?: number; about?: string };
-
-/**
- * Runs a review: reads the analyze endpoint's progress stream (one JSON
- * object per line) and resolves with the finished analysis.
- */
-async function requestReview(documentId: string, onProgress: (p: Progress) => void): Promise<DocAnalysis> {
-  const res = await fetch(`/api/documents/${documentId}/analyze`, { method: "POST" });
-  if (!res.ok || !res.body || !res.headers.get("content-type")?.includes("ndjson")) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? "The review didn’t finish. Please try again.");
-  }
-  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buffer = "";
-  let about: string | undefined;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (value) buffer += value;
-    const lines = buffer.split("\n");
-    buffer = done ? "" : lines.pop()!;
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      let e: ReviewEvent;
-      try {
-        e = JSON.parse(line) as ReviewEvent;
-      } catch {
-        continue;
-      }
-      if (e.type === "done") return e.analysis;
-      if (e.type === "error") throw new Error(e.error);
-      if (e.stage === "understand" && e.detail) about = e.detail;
-      onProgress({ stage: e.stage, detail: e.detail, done: e.done, total: e.total, about });
-    }
-    if (done) throw new Error("The review was interrupted. Please try again.");
-  }
-}
+import { startReview, useReviewRun } from "./review-runner";
 
 const DOT: Record<IssueType, string> = {
   spelling: "bg-[#e5372b]",
@@ -57,9 +21,14 @@ const TONE = {
   bad: { ring: "#b42318", text: "text-danger" },
 } as const;
 
-/** AI review: score, summary and the flagged sentences, with fixes. */
+/**
+ * AI review: score, summary and the flagged sentences, with fixes. The review
+ * itself runs in review-runner (it carries on, and retries, after the panel
+ * is gone); a review left unfinished last time (`pending`) picks up again here.
+ */
 export function ReviewPanel({
   documentId,
+  pending,
   analysis,
   located,
   dismissedCount,
@@ -76,6 +45,8 @@ export function ReviewPanel({
   onDismiss,
 }: {
   documentId: string;
+  /** Where an unfinished review of this document stopped (it carries on by itself). */
+  pending: ReviewPlace | null;
   analysis: DocAnalysis | null;
   located: LocatedIssue[];
   dismissedCount: number;
@@ -91,27 +62,43 @@ export function ReviewPanel({
   onRemove: (i: LocatedIssue) => void;
   onDismiss: (i: LocatedIssue) => void;
 }) {
-  const [reviewing, setReviewing] = useState(false);
-  const [progress, setProgress] = useState<Progress | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const run = useReviewRun(documentId);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [filter, setFilter] = useState<IssueType | "all">("all");
+  const known = analysis?.analyzed_at ?? null;
 
   const review = async () => {
-    setError(null);
-    setProgress(null);
-    setReviewing(true);
-    try {
-      if (!(await beforeReview())) throw new Error("Couldn’t save your latest changes. Please try again.");
-      const analysis = await requestReview(documentId, setProgress);
-      onReviewed(analysis);
-      setFilter("all");
-    } catch (e) {
-      setError(e instanceof Error && e.message !== "Failed to fetch" ? e.message : "The review didn’t finish. Please try again.");
-    } finally {
-      setReviewing(false);
-      setProgress(null);
-    }
+    setSaveError(null);
+    setSaving(true);
+    const saved = await beforeReview().catch(() => false);
+    setSaving(false);
+    if (!saved) return setSaveError("Couldn’t save your latest changes. Check your connection and try again.");
+    startReview(documentId, { known });
   };
+
+  // A review left unfinished last time carries on from where it stopped (once per visit).
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (resumed.current || !pending) return;
+    resumed.current = true;
+    startReview(documentId, { resume: true, known, place: pending });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, documentId]);
+
+  // Finished (even while the writer was elsewhere in the app): show it.
+  useEffect(() => {
+    if (run.phase === "done" && run.analysis.analyzed_at !== known) onReviewed(run.analysis);
+  }, [run, known, onReviewed]);
+  // A new review starts with every flag showing.
+  const [filterFor, setFilterFor] = useState(known);
+  if (filterFor !== known) {
+    setFilterFor(known);
+    setFilter("all");
+  }
+
+  const reviewing = saving || run.phase === "running";
+  const error = saveError ?? (run.phase === "error" ? run.message : null);
 
   const tooShort = words < 3;
   const counts = located.reduce<Partial<Record<IssueType, number>>>((acc, i) => ({ ...acc, [i.type]: (acc[i.type] ?? 0) + 1 }), {});
@@ -137,7 +124,7 @@ export function ReviewPanel({
       {error && <Notice tone="error">{error}</Notice>}
 
       {reviewing ? (
-        <ReviewProgress progress={progress} minutes={minutes} />
+        <ReviewProgress place={run.phase === "running" ? run.place : null} waiting={run.phase === "running" && run.waiting} minutes={minutes} />
       ) : !analysis ? (
         <div className="flex flex-col gap-4">
           <p className="text-[14px] leading-relaxed text-ink-3">
@@ -199,9 +186,13 @@ export function ReviewPanel({
   );
 }
 
-/** The review's stages, ticked off as they finish. */
-function ReviewProgress({ progress, minutes }: { progress: Progress | null; minutes: number }) {
-  const current = progress ? REVIEW_STEPS.findIndex((s) => s.stage === progress.stage) : 0;
+/**
+ * The review's stages, ticked off as they finish. `waiting`: paused where it
+ * got to and carrying on shortly — said gently, never as an error.
+ */
+function ReviewProgress({ place, waiting, minutes }: { place: ReviewPlace | null; waiting: boolean; minutes: number }) {
+  const progress = place;
+  const current = progress ? Math.max(0, REVIEW_STEPS.findIndex((s) => s.stage === progress.stage)) : 0;
   return (
     <div className="flex flex-col gap-3 rounded-2xl bg-sunken px-4 py-4" role="status" aria-live="polite">
       <ol className="flex flex-col gap-2.5">
@@ -209,7 +200,7 @@ function ReviewProgress({ progress, minutes }: { progress: Progress | null; minu
           const state = i < current ? "done" : i === current ? "now" : "next";
           let note: string | null = null;
           if (step.stage === "understand" && progress?.about && i <= current) note = progress.about;
-          if (step.stage === "check" && state === "now" && progress?.total && progress.total > 1) note = `Part ${Math.min(progress.done! + 1, progress.total)} of ${progress.total}`;
+          if (step.stage === "check" && state === "now" && progress?.total && progress.total > 1) note = `Part ${Math.min((progress.done ?? 0) + 1, progress.total)} of ${progress.total}`;
           return (
             <li key={step.stage} className="flex items-start gap-2.5">
               <span className="mt-px grid h-5 w-5 flex-none place-items-center">
@@ -235,7 +226,9 @@ function ReviewProgress({ progress, minutes }: { progress: Progress | null; minu
         })}
       </ol>
       <p className="border-t border-line pt-3 text-[12px] leading-relaxed text-ink-3">
-        Usually about {minutes} {minutes === 1 ? "minute" : "minutes"}. You can keep reading while Mira works.
+        {waiting
+          ? "This one is taking a little longer than usual. Mira has kept its place and will finish on its own — keep writing, or come back to it later."
+          : `Usually about ${minutes} ${minutes === 1 ? "minute" : "minutes"}. You can keep reading while Mira works.`}
       </p>
     </div>
   );

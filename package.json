@@ -20,6 +20,7 @@
     "@tiptap/starter-kit": "3.32.2",
     "docx": "9.15.1",
     "lucide-react": "^1.72.0",
+    "mammoth": "1.13.0",
     "next": "16.4.6",
     "pdfkit": "0.20.2",
     "react": "19.3.0",

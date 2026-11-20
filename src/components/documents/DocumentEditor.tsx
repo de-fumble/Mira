@@ -20,6 +20,7 @@ import {
   TYPING_WPM,
   typingSeconds,
 } from "@/lib/documents";
+import type { ReviewPlace } from "@/lib/review/events";
 import { parseDoc, serializeDoc, toPlain, type Block, type Run } from "@/lib/rich-text";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { DictationCommands } from "./DictationCommands";
@@ -46,11 +47,17 @@ const fmtTimer = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart
 export function DocumentEditor({
   doc,
   dictated: dictatedBefore,
+  imported = null,
+  reviewPending = null,
   dictationEnabled,
 }: {
   doc: { id: string; title: string; content: string; analysis: DocAnalysis | null };
+  /** Where an unfinished AI review of this document stopped (it carries on when the document opens). */
+  reviewPending?: ReviewPlace | null;
   /** Words dictated into this document so far, and the seconds spent talking. */
   dictated: { words: number; seconds: number };
+  /** Set when the document was just made from an uploaded file (what was left out of it). */
+  imported?: { images: number; tables: number } | null;
   dictationEnabled: boolean;
 }) {
   // Saved as text with light formatting markers (lib/rich-text); the review,
@@ -64,7 +71,13 @@ export function DocumentEditor({
   const [analysis, setAnalysis] = useState<DocAnalysis | null>(doc.analysis);
   const [dismissed, setDismissed] = useState<string[]>(doc.analysis?.dismissed ?? []);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [note, setNote] = useState<{ tone: "success" | "info"; text: string } | null>(null);
+  const [note, setNote] = useState<{ tone: "success" | "info"; text: string } | null>(() =>
+    imported ? { tone: "success", text: importedNote(imported, dictationEnabled) } : null,
+  );
+  // The note is shown once: a reload shouldn't bring it back.
+  useEffect(() => {
+    if (imported) window.history.replaceState(window.history.state, "", window.location.pathname);
+  }, [imported]);
   const [draft, setDraft] = useState<{ from: number; to: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [dictated, setDictated] = useState(dictatedBefore);
@@ -229,6 +242,9 @@ export function DocumentEditor({
   const spokenRef = useRef<DictationState>(freshDictation());
   const draftTextRef = useRef(""); // what's in the draft range now
   const [caps, setCaps] = useState(false);
+  // Text is selected (dictating replaces it) / this dictation is replacing a selection.
+  const [selected, setSelected] = useState(false);
+  const [replacing, setReplacing] = useState(false);
 
   const levelRef = useRef<HTMLDivElement>(null);
   const dictation = useDictation({
@@ -252,6 +268,7 @@ export function DocumentEditor({
         editor.view.dispatch(tr);
         draftTextRef.current = state.text;
         updateDraft({ from: d.from, to });
+        setReplacing(false); // (the selected text is gone now)
       }
       if (end) void dictation.stop();
       else if (pause) dictation.pause();
@@ -263,6 +280,7 @@ export function DocumentEditor({
       draftTextRef.current = "";
       spokenRef.current = freshDictation();
       setCaps(false);
+      setReplacing(false);
       let kept = live.text; // what this dictation put in the document
       if (raw && d && editor) {
         const before = editor.state.doc.textBetween(0, d.from, "\n\n", "\n");
@@ -310,9 +328,12 @@ export function DocumentEditor({
     if (!editor) return;
     setNote(null);
     // Dictate where the cursor is (end of the document if it was never placed).
+    // With text selected, what's said replaces it (the selection stays until the first words arrive).
     const { selection, doc: pm } = editor.state;
+    const replace = touchedRef.current && !selection.empty && selection instanceof TextSelection;
     const caret = touchedRef.current ? selection.to : Selection.atEnd(pm).from;
-    updateDraft({ from: caret, to: caret });
+    updateDraft(replace ? { from: selection.from, to: selection.to } : { from: caret, to: caret });
+    setReplacing(replace);
     draftTextRef.current = "";
     spokenRef.current = freshDictation();
     setCaps(false);
@@ -322,7 +343,10 @@ export function DocumentEditor({
       /* storage unavailable */
     }
     void dictation.start().then((started) => {
-      if (!started) updateDraft(null);
+      if (!started) {
+        updateDraft(null);
+        setReplacing(false);
+      }
     });
   };
 
@@ -386,6 +410,7 @@ export function DocumentEditor({
 
   // Caret inside a flagged word → show that issue in the panel.
   const onCaret = () => {
+    if (editor) setSelected(!editor.state.selection.empty && editor.state.selection instanceof TextSelection);
     const m = modelRef.current;
     if (!editor || !m || !located.length) return;
     const at = toOffset(m, editor.state.selection.from);
@@ -497,6 +522,7 @@ export function DocumentEditor({
         <div className={active ? "contents lg:hidden" : "contents"}>
           <ReviewPanel
             documentId={doc.id}
+            pending={reviewPending}
             analysis={analysis}
             located={located}
             dismissedCount={dismissed.length}
@@ -581,14 +607,18 @@ export function DocumentEditor({
               )}
             </p>
             <p className="hidden text-[13px] leading-tight text-ink-3 sm:block">
-              {phase === "listening"
+              {phase === "listening" && replacing
+                ? "Say the new version — it replaces the highlighted text"
+                : phase === "listening"
                 ? "Say “pause dictation” or “end dictation”"
                 : phase === "paused"
                   ? "Mira isn’t listening — tap Resume"
                   : phase === "polishing"
                     ? "Improving accuracy — a few seconds"
                     : dictationEnabled
-                      ? "Talk — Mira types at your cursor"
+                      ? selected
+                        ? "Talk — replaces the selected text"
+                        : "Talk — Mira types at your cursor"
                       : "Switched off by the admin for now"}
             </p>
           </div>
@@ -633,6 +663,18 @@ export function DocumentEditor({
       </ConfirmDialog>
     </div>
   );
+}
+
+function importedNote(left: { images: number; tables: number }, dictation: boolean): string {
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const dropped = [left.images && plural(left.images, "picture", "pictures"), left.tables && plural(left.tables, "table", "tables")].filter(Boolean);
+  return [
+    "Your document is ready to edit.",
+    dictation ? "Tap where you want to add something, then press Dictate. To rewrite a part, select it first and dictate the new version." : "",
+    dropped.length ? `${dropped.join(" and ")} couldn’t come across${left.tables ? " (table rows are kept as lines of text)" : ""}.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** Saves edits now. Mira also saves on its own a moment after you stop typing; this shows where that's at. */

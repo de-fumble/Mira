@@ -1,14 +1,24 @@
 import { NextResponse } from "next/server";
-import { countWords, hashText, REVIEW_MAX_WORDS, type DocAnalysis } from "@/lib/documents";
+import type { DocAnalysis } from "@/lib/documents";
 import type { ReviewEvent } from "@/lib/review/events";
-import { ReviewBusyError, ReviewUnavailableError } from "@/lib/review/gemini";
-import { PIPELINE_VERSION, runReview } from "@/lib/review/pipeline";
-import { logReview } from "@/lib/review-log";
+import { claimReviewJob, finishReviewJob } from "@/lib/review/jobs";
+import { checkLength, runReviewJob } from "@/lib/review/run-job";
 import { toPlain } from "@/lib/rich-text";
 import { createClient } from "@/lib/supabase/server";
 
 // Long documents take a while to review.
 export const maxDuration = 300;
+
+/** This run stops starting new attempts this long after it began (maxDuration is 300 s). */
+const RUN_BUDGET_MS = 285_000;
+
+const STREAM_HEADERS = {
+  "Content-Type": "application/x-ndjson; charset=utf-8",
+  "Cache-Control": "no-store",
+  // Don't let proxies hold the progress lines back.
+  "X-Accel-Buffering": "no",
+};
+const ndjson = (line: ReviewEvent) => new Response(JSON.stringify(line) + "\n", { headers: STREAM_HEADERS });
 
 /**
  * POST /api/documents/:id/analyze — runs the correction engine on the saved
@@ -16,31 +26,53 @@ export const maxDuration = 300;
  *
  * Answers with a stream of newline-separated JSON (ReviewEvent): a "stage"
  * line as each step starts or progresses, then one "done" line with the
- * analysis, or an "error" line. Problems found before the review starts
- * (signed out, missing, too short or long) are plain JSON with a status code.
- * Row Level Security limits this to the owner's documents.
+ * analysis. Problems found before the review starts (signed out, missing, too
+ * short or long) are plain JSON with a status code.
+ *
+ * A review never fails because the AI is busy, slow or out of quota: it keeps
+ * its place (lib/review/jobs.ts), waits and tries again — within this request
+ * while there's time, then by ending on a "waiting" line that says when to
+ * ask again. Asking again with `?resume=1&known=<analyzed_at of the review the
+ * browser has>` carries on from where it stopped, answers "done" if the review
+ * finished in the meantime, or "waiting" while another run (another request,
+ * or the scheduler: /api/cron/reviews) is on it.
+ *
+ * Row Level Security limits all of this to the owner's documents.
  */
-export async function POST(_req: Request, ctx: RouteContext<"/api/documents/[id]/analyze">) {
+export async function POST(req: Request, ctx: RouteContext<"/api/documents/[id]/analyze">) {
   const { id } = await ctx.params;
+  const query = new URL(req.url).searchParams;
   const supabase = await createClient();
   const { data: claims } = await supabase.auth.getClaims();
   if (!claims?.claims) return NextResponse.json({ error: "Please sign in." }, { status: 401 });
 
-  const { data: doc } = await supabase.from("documents").select("title, content").eq("id", id).maybeSingle<{ title: string; content: string }>();
+  const { data: doc } = await supabase
+    .from("documents")
+    .select("content, analysis")
+    .eq("id", id)
+    .maybeSingle<{ content: string; analysis: DocAnalysis | null }>();
   if (!doc) return NextResponse.json({ error: "Document not found." }, { status: 404 });
 
-  // The review reads the words only (headings, bullets and bold are formatting).
-  const content = toPlain(doc.content);
-  const words = countWords(content);
-  if (words < 3) return NextResponse.json({ error: "Write or dictate a few sentences first." }, { status: 400 });
-  if (words > REVIEW_MAX_WORDS) {
-    return NextResponse.json(
-      { error: `This document has ${words.toLocaleString("en")} words. AI review works on up to ${REVIEW_MAX_WORDS.toLocaleString("en")} — split it into parts.` },
-      { status: 400 },
-    );
+  // Carrying on a review that has since finished (in another run): hand back its result.
+  if (query.get("resume") === "1" && doc.analysis && doc.analysis.analyzed_at !== (query.get("known") ?? "")) {
+    return ndjson({ type: "done", analysis: doc.analysis });
   }
 
-  const userId = claims.claims.sub;
+  // The review reads the words only (headings, bullets and bold are formatting).
+  const problem = checkLength(toPlain(doc.content));
+  if (problem) {
+    await finishReviewJob(supabase, id); // nothing to carry on with
+    return NextResponse.json({ error: problem.error }, { status: problem.status });
+  }
+
+  const claim = await claimReviewJob(supabase, id);
+  if (claim.status === "held") {
+    // Another run is on it: check back shortly.
+    const leaseLeft = claim.job?.lease_until ? Date.parse(claim.job.lease_until) - Date.now() : 0;
+    return ndjson({ type: "waiting", retryInMs: Math.min(20_000, Math.max(5_000, leaseLeft)), ...(claim.job?.state.place ?? { stage: "check" }) });
+  }
+  const job = claim.status === "claimed" ? { tracked: true, state: claim.job.state, rounds: claim.job.rounds } : { tracked: false, state: {}, rounds: 0 };
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -53,49 +85,13 @@ export async function POST(_req: Request, ctx: RouteContext<"/api/documents/[id]
           open = false; // the writer closed the page; keep going so the review is still saved
         }
       };
-      const started = Date.now();
-      let reviewed = false;
       try {
-        const result = await runReview({ title: doc.title, content, onProgress: send });
-        reviewed = true;
-        const stamp = Date.now().toString(36);
-        const issues = result.issues.map((issue, i) => ({ ...issue, id: `${stamp}-${i}` }));
-        const analysis: DocAnalysis = {
-          score: result.score,
-          summary: result.summary,
-          issues,
-          dismissed: [],
-          word_count: words,
-          content_hash: hashText(content),
-          analyzed_at: new Date().toISOString(),
-          brief: result.brief,
-          pipeline: { version: PIPELINE_VERSION, parts: result.parts, stages: result.stages },
-        };
-        const { error } = await supabase.from("documents").update({ analysis }).eq("id", id);
-        if (error) throw error;
-        send({ type: "done", analysis });
-        // For the admin dashboard (never throws).
-        await logReview({ userId, documentId: id, words, durationMs: Date.now() - started, meta: result.meta, issues, score: result.score });
-      } catch (err) {
-        if (!reviewed) await logReview({ userId, documentId: id, words, durationMs: Date.now() - started, error: err });
-        if (err instanceof ReviewUnavailableError) send({ type: "error", error: err.message, status: 503 });
-        else if (err instanceof ReviewBusyError) send({ type: "error", error: err.message, status: 429 });
-        else {
-          console.error("Document review failed", err);
-          send({ type: "error", error: "The review didn’t finish. Please try again.", status: 500 });
-        }
+        await runReviewJob({ supabase, documentId: id, userId: claims.claims.sub, job, send, runEnds: Date.now() + RUN_BUDGET_MS });
       } finally {
         if (open) controller.close();
       }
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "application/x-ndjson; charset=utf-8",
-      "Cache-Control": "no-store",
-      // Don't let proxies hold the progress lines back.
-      "X-Accel-Buffering": "no",
-    },
-  });
+  return new Response(stream, { headers: STREAM_HEADERS });
 }

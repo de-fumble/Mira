@@ -7,7 +7,9 @@ import { z } from "zod";
  * models when one is overloaded, out of quota or retired.
  */
 
-const API = "https://generativelanguage.googleapis.com/v1beta/models";
+const DEFAULT_API = "https://generativelanguage.googleapis.com/v1beta/models";
+/** GEMINI_API_URL points the engine at a stand-in server (for testing busy or slow models). */
+const api = () => process.env.GEMINI_API_URL?.replace(/\/+$/, "") || DEFAULT_API;
 
 /** Main models, for checking sentences. GEMINI_MODELS (comma-separated) overrides. */
 const REVIEW_MODELS = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"];
@@ -66,7 +68,9 @@ export function requireKey(): string {
 
 /**
  * One structured call: tries each model in `chain` until one answers in the
- * right shape before `deadline`. Throws ReviewBusyError if none did.
+ * right shape before `deadline`. Throws ReviewBusyError if none did (or a
+ * plain ReviewError if every model hit an unexpected error), and
+ * ReviewUnavailableError straight away if the key is missing or rejected.
  */
 export async function generateJson<S extends z.ZodType>(opts: {
   stage: string;
@@ -106,26 +110,31 @@ export async function generateJson<S extends z.ZodType>(opts: {
       return { data: parsed.data, model, attempts, usage };
     } catch (err) {
       const ms = Date.now() - started;
-      if (!(err instanceof TryNextModel)) {
+      if (err instanceof ReviewUnavailableError) {
         attempts.push({ model, result: "error", ms, stage: opts.stage });
-        const wrapped = err instanceof ReviewError ? err : new ReviewError(err instanceof Error ? err.message : "Review failed", { cause: err });
-        wrapped.attempts = attempts;
-        throw wrapped;
+        err.attempts = attempts;
+        throw err;
       }
-      console.warn(`Review (${opts.stage}): ${model} unavailable — ${err.message}`);
-      attempts.push({ model, result: err.result, ms, stage: opts.stage });
+      // Anything else (busy, slow, an odd reply, an unexpected error): the next model may manage.
+      const result = err instanceof TryNextModel ? err.result : "error";
+      console.warn(`Review (${opts.stage}): ${model} didn’t answer — ${err instanceof Error ? err.message : err}`);
+      attempts.push({ model, result, ms, stage: opts.stage });
       lastError = err;
     }
   }
-  const busy = new ReviewBusyError("The AI reviewer is busy right now. Please try again in a minute.", { cause: lastError });
-  busy.attempts = attempts;
-  throw busy;
+  // Every model was busy, slow or out of quota (or ran into an unexpected error).
+  const allErrors = attempts.length > 0 && attempts.every((a) => a.result === "error");
+  const failed = allErrors
+    ? new ReviewError(lastError instanceof Error ? lastError.message : "Review failed", { cause: lastError })
+    : new ReviewBusyError("The AI reviewer is busy right now. Please try again in a minute.", { cause: lastError });
+  failed.attempts = attempts;
+  throw failed;
 }
 
 async function callModel(model: string, key: string, body: string, timeoutMs: number): Promise<{ json: unknown; usage: Usage }> {
   let res: Response;
   try {
-    res = await fetch(`${API}/${encodeURIComponent(model)}:generateContent`, {
+    res = await fetch(`${api()}/${encodeURIComponent(model)}:generateContent`, {
       method: "POST",
       headers: { "x-goog-api-key": key, "Content-Type": "application/json" },
       body,

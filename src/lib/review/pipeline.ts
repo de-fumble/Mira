@@ -1,6 +1,6 @@
 import "server-only";
 import { z } from "zod";
-import { countWords, findAll, ISSUE_TYPES, scoreFor, type DocBrief, type DocIssue, type IssueType } from "../documents";
+import { countWords, findAll, hashText, ISSUE_TYPES, scoreFor, type DocBrief, type DocIssue, type IssueType } from "../documents";
 import type { ReviewEvent, ReviewStage } from "./events";
 import { fastModelChain, generateJson, modelChain, requireKey, ReviewError, ReviewUnavailableError, type Attempt, type Usage } from "./gemini";
 import { ruleChecks, type RuleIssue } from "./rules";
@@ -27,11 +27,19 @@ import { chunk, segment, type Chunk, type Sentence } from "./segment";
  *
  * The AI never edits the document: it only proposes flags, and the writer
  * decides.
+ *
+ * A review can stop part-way (every model busy or slow) and carry on later
+ * without redoing anything: given a `checkpoint`, the pipeline records the
+ * context from stage 3 and each part's verified flags as they finish (keyed by
+ * the part's text, so parts edited in the meantime are checked again), and
+ * skips whatever is already in it.
  */
 
 export const PIPELINE_VERSION = 2;
 
 const TOTAL_BUDGET_MS = 270_000; // the analyze route may run for 300 s
+/** Times the context read (stage 3) may wait for a model before the review carries on without it. */
+const UNDERSTAND_TRIES = 2;
 const UNDERSTAND_MAX_MS = 60_000;
 /** How long the main model gets before a backup takes over: longer for bigger parts. */
 const checkPatienceMs = (words: number) => Math.min(150_000, 45_000 + words * 85);
@@ -47,6 +55,21 @@ export type ReviewMeta = {
   /** A backup model had to step in somewhere. */
   fellBack: boolean;
 };
+
+/** A verified flag, kept in a checkpoint: offsets count from the start of its part. */
+type StoredFlag = Omit<DocIssue, "id"> & { start: number; end: number };
+
+/** How far a review got (saved between attempts; see the comment at the top). */
+export type ReviewCheckpoint = {
+  /** Stage 3's result (brief null: carried on without it). */
+  brief?: { value: DocBrief | null; names: string[] };
+  /** How many times stage 3 couldn't get an answer. */
+  briefTries?: number;
+  /** Checked parts, by the hash of their text. */
+  parts?: Record<string, { flags: StoredFlag[]; model: string }>;
+};
+
+const partKey = (part: Chunk) => hashText(part.sentences.map((s) => s.text).join("\n"));
 
 export type ReviewResult = {
   summary: string;
@@ -255,17 +278,27 @@ function summarize(brief: DocBrief | null, issues: Pick<DocIssue, "type">[]): st
 
 /* ---------------------------------------------------------- The run */
 
-/** Runs `fn` over `items`, at most `limit` at a time; fails fast. */
+/**
+ * Runs `fn` over `items`, at most `limit` at a time. After a failure nothing
+ * new starts, but the calls already running finish (so their work is kept);
+ * then the first error is thrown.
+ */
 async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
+  let failure: { err: unknown } | null = null;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
+    while (next < items.length && !failure) {
       const i = next++;
-      results[i] = await fn(items[i]);
+      try {
+        results[i] = await fn(items[i]);
+      } catch (err) {
+        failure ??= { err };
+      }
     }
   });
   await Promise.all(workers);
+  if (failure) throw (failure as { err: unknown }).err;
   return results;
 }
 
@@ -279,11 +312,23 @@ export async function runReview(opts: {
   title: string;
   content: string;
   onProgress?: (e: ReviewEvent) => void;
+  /** Epoch ms by which the review must finish (default: 270 s from now). */
+  deadline?: number;
+  /**
+   * Makes the review resumable: work already in it is skipped, and new work is
+   * added to it (and `onCheckpoint` called) as each step finishes. Without
+   * one, a failed context read is simply skipped.
+   */
+  checkpoint?: ReviewCheckpoint;
+  onCheckpoint?: (checkpoint: ReviewCheckpoint) => Promise<void> | void;
 }): Promise<ReviewResult> {
   requireKey(); // fail fast, before any work
-  const { title, content } = opts;
+  const { title, content, checkpoint } = opts;
   const progress = (e: Extract<ReviewEvent, { type: "stage" }>) => opts.onProgress?.(e);
-  const deadline = Date.now() + TOTAL_BUDGET_MS;
+  const deadline = opts.deadline ?? Date.now() + TOTAL_BUDGET_MS;
+  const saved = async () => {
+    if (checkpoint) await opts.onCheckpoint?.(checkpoint);
+  };
   const stages: ReviewResult["stages"] = [];
   const attempts: Attempt[] = [];
   let usage: Usage = { input: 0, output: 0, thinking: 0 };
@@ -303,9 +348,17 @@ export async function runReview(opts: {
     const parts = chunk(sentences, PART_WORDS);
     const rules = await timed("rules", () => ruleChecks(sentences));
 
-    // 3. Understand. If it fails, the review carries on without context.
+    // 3. Understand. If it keeps failing, the review carries on without context.
     progress({ type: "stage", stage: "understand" });
     const { brief, names } = await timed("understand", async (): Promise<{ brief: DocBrief | null; names: string[] }> => {
+      if (checkpoint?.brief) return { brief: checkpoint.brief.value, names: checkpoint.brief.names.filter((x) => content.includes(x)) };
+      const keep = async (r: { brief: DocBrief | null; names: string[] }) => {
+        if (checkpoint) {
+          checkpoint.brief = { value: r.brief, names: r.names };
+          await saved();
+        }
+        return r;
+      };
       try {
         const r = await generateJson({
           stage: "understand",
@@ -321,24 +374,41 @@ export async function runReview(opts: {
         const { names: listed, kind, purpose, audience, tone, variety } = r.data;
         // Only names that really appear in the document can protect anything.
         const found = [...new Set(listed.map((x) => x.trim()).filter((x) => x.length > 1 && content.includes(x)))].slice(0, 60);
-        return { brief: { kind, purpose, audience, tone, variety }, names: found };
+        return keep({ brief: { kind, purpose, audience, tone, variety }, names: found });
       } catch (err) {
         if (err instanceof ReviewUnavailableError) throw err;
         if (err instanceof ReviewError) attempts.push(...err.attempts);
+        // A resumable review waits for the context (it makes the checks better) — but not forever.
+        if (checkpoint && (checkpoint.briefTries ?? 0) + 1 < UNDERSTAND_TRIES) {
+          checkpoint.briefTries = (checkpoint.briefTries ?? 0) + 1;
+          await saved();
+          throw err;
+        }
         console.warn("Review: couldn’t read the document’s context, carrying on without it", err);
-        return { brief: null, names: [] };
+        return keep({ brief: null, names: [] });
       }
     });
     if (brief) progress({ type: "stage", stage: "understand", detail: brief.kind });
 
     // 4. Check each part (in parallel), 5. verify each answer as it arrives.
-    let done = 0;
+    // Parts already checked (same text) come from the checkpoint.
+    const kept = checkpoint ? (checkpoint.parts ??= {}) : {};
+    const current = new Set(parts.map(partKey));
+    for (const key of Object.keys(kept)) if (!current.has(key)) delete kept[key]; // edited since
+    let done = parts.filter((p) => kept[partKey(p)]).length;
     progress({ type: "stage", stage: "check", done, total: parts.length });
     const protectedNames = new Set(names);
     const checkedBy: string[] = [];
     let verifyMs = 0;
     const checked = await timed("check", () =>
-      pool(parts, PARALLEL_PARTS, async (part) => {
+      pool(parts, PARALLEL_PARTS, async (part): Promise<Verified[]> => {
+        const key = partKey(part);
+        const offset = part.sentences[0].start;
+        const before = kept[key];
+        if (before) {
+          checkedBy.push(before.model);
+          return before.flags.map((f) => ({ ...f, start: f.start + offset, end: f.end + offset }));
+        }
         const r = await generateJson({
           stage: "check",
           schema: CheckSchema,
@@ -357,6 +427,10 @@ export async function runReview(opts: {
         const t = Date.now();
         const verified = verify(r.data.issues, part, rules, protectedNames);
         verifyMs += Date.now() - t;
+        if (checkpoint) {
+          kept[key] = { flags: verified.map((f) => ({ ...f, start: f.start - offset, end: f.end - offset })), model: r.model };
+          await saved();
+        }
         progress({ type: "stage", stage: "check", done: ++done, total: parts.length });
         return verified;
       }),
