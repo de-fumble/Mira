@@ -2,6 +2,8 @@
 
 import { Check, CloudOff, ListChecks, Mic, Pause, Play, Save, Square, Trash } from "lucide-react";
 import { Placeholder } from "@tiptap/extensions";
+import { closeHistory } from "@tiptap/pm/history";
+import type { Node as PMNode } from "@tiptap/pm/model";
 import { Selection, TextSelection } from "@tiptap/pm/state";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -9,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { addDictation, deleteDocument, dismissIssues, refreshDocumentList, renameDocument, saveDocument } from "@/app/document-actions";
 import { applyDictation, freshDictation, previewDictation, type DictationState } from "@/lib/dictation";
 import {
+  bulkFixes,
   countWords,
   formatSpan,
   hashText,
@@ -403,6 +406,35 @@ export function DocumentEditor({
     void flush();
   };
 
+  // "Apply all": every suggested fix in one step (one Undo takes them all back).
+  const [bulk, setBulk] = useState<{ count: number; doc: PMNode } | null>(null);
+  const applyAll = (issues: LocatedIssue[]) => {
+    if (!editor) return;
+    const fixes = bulkFixes(issues);
+    if (!fixes.length) return;
+    const m = (modelRef.current ??= docModel(editor.state.doc));
+    const tr = closeHistory(editor.state.tr); // its own undo step, apart from any typing just before
+    // From the end backwards, so each fix's place in the text is still right.
+    for (const i of [...fixes].reverse()) {
+      const from = toPos(m, i.start);
+      const to = toPos(m, i.end, "end");
+      if (i.suggestion) tr.insertText(i.suggestion, from, to);
+      else tr.delete(from, to);
+    }
+    editor.view.dispatch(tr);
+    setBulk({ count: fixes.length, doc: editor.state.doc });
+    setActiveId(null);
+    void flush(); // saved now, so the new score is on the documents list straight away
+  };
+  // Undo is offered until the text changes again.
+  const bulkApplied = bulk && editor?.state.doc === bulk.doc ? bulk.count : null;
+  const undoAll = () => {
+    if (!editor || !bulk || editor.state.doc !== bulk.doc) return;
+    editor.commands.undo();
+    setBulk(null);
+    void flush();
+  };
+
   const dismiss = (issue: LocatedIssue) => {
     setDismissed((d) => [...d, issue.id]);
     void dismissIssues(doc.id, [issue.id]);
@@ -534,12 +566,16 @@ export function DocumentEditor({
             beforeReview={flush}
             onReviewed={(a) => {
               setAnalysis(a);
+              setBulk(null);
               void refreshDocumentList().catch(() => {});
               setDismissed([]);
               setActiveId(null);
             }}
             onFocus={focusIssue}
             onApply={applyFix}
+            onApplyAll={applyAll}
+            bulkApplied={bulkApplied}
+            onUndoAll={undoAll}
             onRemove={removeText}
             onDismiss={dismiss}
           />

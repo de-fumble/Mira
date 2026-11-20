@@ -158,6 +158,18 @@ export function locateIssues(text: string, issues: DocIssue[]): LocatedIssue[] {
  * text (not fixed, not marked "keep as is"), scored against the current words.
  * The editor's score card and the documents list both show this.
  */
+/**
+ * The flags "Apply all" fixes: every one with a suggested fix, never two on
+ * the same words (a sentence rewrite wins over a word fix inside it — the
+ * rewrite already covers it). In reading order.
+ */
+export function bulkFixes(issues: LocatedIssue[]): LocatedIssue[] {
+  const kept: LocatedIssue[] = [];
+  const byLength = issues.filter((i) => i.suggestion !== null).sort((a, b) => b.end - b.start - (a.end - a.start) || a.start - b.start);
+  for (const i of byLength) if (!kept.some((k) => i.start < k.end && k.start < i.end)) kept.push(i);
+  return kept.sort((a, b) => a.start - b.start);
+}
+
 export function currentScore(analysis: DocAnalysis, plain: string): number {
   const open = analysis.issues.filter((i) => !(analysis.dismissed ?? []).includes(i.id));
   return scoreFor(locateIssues(plain, open), countWords(plain));

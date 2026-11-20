@@ -1,8 +1,8 @@
 "use client";
 
-import { ArrowRight, Check, CircleCheck, RefreshCw, Sparkles } from "lucide-react";
+import { ArrowRight, Check, CheckCheck, CircleCheck, RefreshCw, Sparkles, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { ISSUE_TYPES, scoreLabel, type DocAnalysis, type DocBrief, type IssueType, type LocatedIssue } from "@/lib/documents";
+import { bulkFixes, ISSUE_TYPES, scoreLabel, type DocAnalysis, type DocBrief, type IssueType, type LocatedIssue } from "@/lib/documents";
 import { REVIEW_STEPS, type ReviewPlace } from "@/lib/review/events";
 import { Notice, Spinner } from "../ui";
 import { startReview, useReviewRun } from "./review-runner";
@@ -41,6 +41,9 @@ export function ReviewPanel({
   onReviewed,
   onFocus,
   onApply,
+  onApplyAll,
+  bulkApplied,
+  onUndoAll,
   onRemove,
   onDismiss,
 }: {
@@ -59,6 +62,11 @@ export function ReviewPanel({
   onReviewed: (a: DocAnalysis) => void;
   onFocus: (i: LocatedIssue) => void;
   onApply: (i: LocatedIssue) => void;
+  /** Applies every suggested fix among these, in one step. */
+  onApplyAll: (issues: LocatedIssue[]) => void;
+  /** How many fixes "Apply all" just made (while they can still be undone). */
+  bulkApplied: number | null;
+  onUndoAll: () => void;
   onRemove: (i: LocatedIssue) => void;
   onDismiss: (i: LocatedIssue) => void;
 }) {
@@ -103,6 +111,7 @@ export function ReviewPanel({
   const tooShort = words < 3;
   const counts = located.reduce<Partial<Record<IssueType, number>>>((acc, i) => ({ ...acc, [i.type]: (acc[i.type] ?? 0) + 1 }), {});
   const shown = filter === "all" ? located : located.filter((i) => i.type === filter);
+  const fixable = bulkFixes(shown).length;
   const fixed = analysis ? Math.max(0, analysis.issues.length - dismissedCount - located.length) : 0;
   const minutes = Math.max(1, Math.round(words / 1500));
 
@@ -147,6 +156,19 @@ export function ReviewPanel({
             </p>
           )}
 
+          {bulkApplied !== null && (
+            <div role="status" className="flex flex-none items-center justify-between gap-3 rounded-xl bg-success-soft py-2 pl-3 pr-1.5">
+              <span className="inline-flex items-center gap-2 text-[13px] font-medium text-ink">
+                <CheckCheck aria-hidden className="h-4 w-4 flex-none text-success" />
+                Applied {bulkApplied} {bulkApplied === 1 ? "fix" : "fixes"}
+              </span>
+              <button type="button" onClick={onUndoAll} className="btn h-8 gap-1.5 rounded-full px-3 text-[13px] text-ink-2 hover:bg-surface hover:text-ink">
+                <Undo2 aria-hidden className="h-3.5 w-3.5" />
+                Undo
+              </button>
+            </div>
+          )}
+
           {located.length > 0 ? (
             <>
               <div role="group" aria-label="Show" className="-mx-1 flex flex-wrap gap-1.5">
@@ -157,6 +179,12 @@ export function ReviewPanel({
                     <FilterChip key={t} on={filter === t} onClick={() => setFilter(t)} label={ISSUE_TYPES[t].label} count={counts[t]!} dot={DOT[t]} />
                   ))}
               </div>
+              {fixable > 1 && (
+                <button type="button" disabled={disabled} onClick={() => onApplyAll(shown)} className="btn btn-md btn-primary w-full flex-none gap-2 disabled:opacity-40">
+                  <CheckCheck aria-hidden className="h-4 w-4" />
+                  {filter === "all" ? `Apply all ${fixable} fixes` : `Apply these ${fixable} fixes`}
+                </button>
+              )}
               <ul className="flex flex-col gap-2">
                 {shown.map((i) => (
                   <IssueCard
